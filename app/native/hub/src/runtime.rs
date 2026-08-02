@@ -4,13 +4,13 @@ use crate::approval::{
 };
 use crate::approval::{ProposalDecisionError, ProposalRegistry, ProposalStatus, unix_time_ms};
 use crate::assistant_tools::{
-    COMPUTER_OBSERVE_TOOL, ESCALATE_TOOL, MAX_TOOL_ROUNDS, MEMORY_SEARCH_TOOL, PROFILE_READ_TOOL,
-    ToolEffect, computer_observe_tool, escalate_tool, escalation_tier, memory_search_query,
-    render_observation, tool_effect, truncated_tool_result, user_data_tools, valid_tool_identity,
+    COMPUTER_OBSERVE_TOOL, CURRENTS_READ_TOOL, CURRENTS_WRITE_TOOL, CurrentsWrite, MAX_TOOL_ROUNDS,
+    MEMORY_SEARCH_TOOL, PROFILE_READ_TOOL, ToolEffect, computer_observe_tool,
+    currents_write_proposal, memory_search_query, render_observation, tool_effect,
+    truncated_tool_result, user_data_tools, valid_tool_identity,
 };
 use crate::byok_tier::ByokProvider;
 use crate::capture_service::CaptureControl;
-use crate::chat_router::FIRST_TIER;
 use crate::computer_use::{
     BoundComputerUseAction, ComputerUseError, ExecutionOutcome, PreparedComputerUseAction,
     available as computer_use_available, capabilities as computer_use_capabilities,
@@ -151,6 +151,7 @@ enum AssistantProviderEvent {
 struct BoundActionProposal {
     proposal: ActionProposal,
     bound_computer_action: Option<BoundComputerUseAction>,
+    currents_write: Option<CurrentsWrite>,
 }
 
 #[derive(serde::Serialize)]
@@ -226,6 +227,17 @@ trait AssistantTurnTools: Send + Sync {
         &self,
         cancellation: CancellationToken,
     ) -> BoxFuture<'static, Result<Option<String>, String>>;
+
+    fn currents_read(
+        &self,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'static, Result<Option<String>, String>>;
+
+    /// Whether an approved `currents_write` would have an account to write to.
+    /// Currents are readable without one — the app mirrors them locally — but
+    /// creating one is a write to the user's own account, so a signed-out turn
+    /// is told that instead of being handed an approval that could only fail.
+    fn currents_account(&self) -> BoxFuture<'static, bool>;
 }
 
 trait AssistantProvider: Send + Sync {
@@ -920,9 +932,8 @@ impl AssistantProvider for RsAiAssistantProvider {
 ///
 /// The multimodal tier exists to read pictures; a configuration that routes it
 /// to a model which cannot is a misconfiguration, not a request to answer
-/// anyway. This is the one part of tier selection that is a fact about the
-/// input rather than a judgement about the question, so it is checked here
-/// rather than left to the model that hands the turn on.
+/// anyway. What a turn has to be able to read is a fact about the input rather
+/// than a judgement about the question, so it is checked here.
 fn required_capabilities(tier: ModelTier) -> &'static [Capability] {
     if tier == ModelTier::Multimodal {
         &[Capability::Text, Capability::ImageIn]
@@ -931,13 +942,7 @@ fn required_capabilities(tier: ModelTier) -> &'static [Capability] {
     }
 }
 
-/// One assistant turn, across however many models answer it.
-///
-/// The turn starts on whichever tier it was dispatched to — for chat that is
-/// always Mercury — and moves up only when the model itself says it should, by
-/// calling `escalate`. The conversation moves with it: the read-only lookups
-/// the fast model already paid for are still in front of the stronger one, so a
-/// handoff costs a round rather than the work.
+/// One assistant turn, on the model the tier it was dispatched to resolves to.
 #[expect(
     clippy::too_many_arguments,
     reason = "the turn carries independently sourced inputs; grouping them would only relabel the arity"
@@ -955,139 +960,112 @@ async fn run_assistant_turn(
     // A tool result attaches to a conversation, not to a prompt: it has to
     // arrive as its own message answering the call that asked for it, which a
     // single `stream(text)` has nowhere to put.
-    let mut conversation = vec![Message::user(text.clone())];
-    let mut tier = tier;
-    loop {
-        let model = match config.model_for_capability(tier, required_capabilities(tier)) {
-            Ok(model) => model,
-            Err(message) => {
-                let _ = sender.send(Err(message)).await;
-                return;
-            }
-        };
-        // The SEARCH tier is grounded through the provider's hosted web-search
-        // tool, which `rs_ai` cannot emit (see `hosted_search.rs`). For the
-        // providers that host one — OpenAI, xAI, and the managed worker's Sonar
-        // route — the turn is dispatched directly against the Responses API (or
-        // the worker's chat completions) so the `url_citation` sources survive
-        // to the reply instead of being dropped by the crate's stream parser.
-        if let Some(backend) = config.hosted_backend(tier) {
-            // The hosted backends take a question, not a conversation, so a
-            // handoff to one asks the user's own words again. What the fast
-            // model looked up locally is of no use to a search engine anyway.
-            run_hosted_turn(&config, &backend, &model, &text, &cancellation, &sender).await;
+    let conversation = vec![Message::user(text.clone())];
+    let model = match config.model_for_capability(tier, required_capabilities(tier)) {
+        Ok(model) => model,
+        Err(message) => {
+            let _ = sender.send(Err(message)).await;
             return;
         }
-        if let Some(endpoint) = config.endpoint.as_deref() {
-            let preflight = tokio::select! {
-                () = cancellation.cancelled() => return,
-                result = endpoint_resolves_publicly(endpoint) => result,
-            };
-            if let Err(message) = preflight {
-                let _ = sender.send(Err(message)).await;
-                return;
-            }
-        }
-        let offered = OfferedTools {
-            computer: computer_use_enabled && computer_use_available(),
-            // Only the tier the turn starts on may hand it on, so a handoff
-            // happens at most once and can never come back down.
-            escalation: tier == FIRST_TIER,
-        };
-        let mut catalogue = Vec::new();
-        if offered.computer {
-            catalogue.push(computer_observe_tool());
-            catalogue.extend(computer_use_tools());
-        }
-        if tools.is_some() {
-            catalogue.extend(user_data_tools());
-        }
-        if offered.escalation {
-            catalogue.push(escalate_tool());
-        }
-        // Owned clones, not borrows: an async closure that borrowed the turn's
-        // cancellation could not be proven `Send` for every lifetime the
-        // spawned task might hand it.
-        let round_config = config.clone();
-        let round_cancellation = cancellation.clone();
-        let open_round = async move |offer_tools: bool, messages: &[Message]| {
-            // `stream_prompt` consumes the builder, so every round builds its
-            // own. A builder is configuration, not a connection.
-            let base = match round_config.kind {
-                AssistantProviderKind::OpenAi => rs_ai::chatgpt(),
-                AssistantProviderKind::Anthropic => rs_ai::claude(),
-                AssistantProviderKind::Gemini => rs_ai::gemini(),
-                AssistantProviderKind::Xai => rs_ai::xai(),
-                AssistantProviderKind::Compatible | AssistantProviderKind::Worker => {
-                    rs_ai::compatible(round_config.endpoint.clone().unwrap_or_default())
-                }
-            }
-            .model(model.clone());
-            let client = base.api_key(round_config.credential.clone());
-            // The last round carries no tools at all. A cap the model is merely
-            // asked to respect is not a cap; withholding the tools is what
-            // actually ends the turn.
-            let client = if catalogue.is_empty() || !offer_tools {
-                client
-            } else {
-                client
-                    .with_tools(catalogue.clone())
-                    .with_tool_choice(ToolChoice::Auto)
-            };
-            let connected = tokio::select! {
-                () = round_cancellation.cancelled() => return None,
-                result = tokio::time::timeout(
-                    PROVIDER_CONNECT_TIMEOUT,
-                    client.stream_prompt(Prompt::Messages(messages.to_vec())),
-                ) => result,
-            };
-            match connected {
-                Ok(Ok(stream)) => Some(Ok(stream)),
-                // A refused request is reported rather than sent, because a
-                // refusal of a tools request is exactly the one the caller can
-                // still answer by asking again without them. The upstream's own
-                // words travel with it: a request this client is not allowed to
-                // send is indistinguishable from a model that cannot answer
-                // until someone reads the status and the body.
-                Ok(Err(error)) => Some(Err(format!(
-                    "assistant provider connection failed: {error}"
-                ))),
-                Err(_) => Some(Err("assistant provider connection timed out".to_owned())),
-            }
-        };
-        let handoff = run_tool_rounds(
-            open_round,
-            conversation,
-            &request_id,
-            offered,
-            tools.as_ref(),
-            &sender,
-            &cancellation,
-        )
-        .await;
-        let Some(handoff) = handoff else {
-            return;
-        };
-        tier = handoff.tier;
-        conversation = handoff.conversation;
-        // The model the user was told about is no longer the model answering,
-        // and a reply arriving from somewhere the interface never named reads
-        // as a different assistant.
-        progress(
-            &request_id,
-            CHAT_MODEL_TOOL,
-            ToolStatus::Complete,
-            Some(&format!(
-                "{ONLINE_CHAT_MODEL_DETAIL}:{}",
-                config.model_for_tier(tier)
-            )),
-        );
+    };
+    // The SEARCH tier is grounded through the provider's hosted web-search
+    // tool, which `rs_ai` cannot emit (see `hosted_search.rs`). For the
+    // providers that host one — OpenAI, xAI, and the managed worker's Sonar
+    // route — the turn is dispatched directly against the Responses API (or
+    // the worker's chat completions) so the `url_citation` sources survive
+    // to the reply instead of being dropped by the crate's stream parser.
+    if let Some(backend) = config.hosted_backend(tier) {
+        // The hosted backends take a question, not a conversation, so they are
+        // asked the user's own words. What was looked up locally is of no use
+        // to a search engine anyway.
+        run_hosted_turn(&config, &backend, &model, &text, &cancellation, &sender).await;
+        return;
     }
+    if let Some(endpoint) = config.endpoint.as_deref() {
+        let preflight = tokio::select! {
+            () = cancellation.cancelled() => return,
+            result = endpoint_resolves_publicly(endpoint) => result,
+        };
+        if let Err(message) = preflight {
+            let _ = sender.send(Err(message)).await;
+            return;
+        }
+    }
+    let offered = OfferedTools {
+        computer: computer_use_enabled && computer_use_available(),
+    };
+    let mut catalogue = Vec::new();
+    if offered.computer {
+        catalogue.push(computer_observe_tool());
+        catalogue.extend(computer_use_tools());
+    }
+    if tools.is_some() {
+        catalogue.extend(user_data_tools());
+    }
+    // Owned clones, not borrows: an async closure that borrowed the turn's
+    // cancellation could not be proven `Send` for every lifetime the
+    // spawned task might hand it.
+    let round_config = config.clone();
+    let round_cancellation = cancellation.clone();
+    let open_round = async move |offer_tools: bool, messages: &[Message]| {
+        // `stream_prompt` consumes the builder, so every round builds its
+        // own. A builder is configuration, not a connection.
+        let base = match round_config.kind {
+            AssistantProviderKind::OpenAi => rs_ai::chatgpt(),
+            AssistantProviderKind::Anthropic => rs_ai::claude(),
+            AssistantProviderKind::Gemini => rs_ai::gemini(),
+            AssistantProviderKind::Xai => rs_ai::xai(),
+            AssistantProviderKind::Compatible | AssistantProviderKind::Worker => {
+                rs_ai::compatible(round_config.endpoint.clone().unwrap_or_default())
+            }
+        }
+        .model(model.clone());
+        let client = base.api_key(round_config.credential.clone());
+        // The last round carries no tools at all. A cap the model is merely
+        // asked to respect is not a cap; withholding the tools is what
+        // actually ends the turn.
+        let client = if catalogue.is_empty() || !offer_tools {
+            client
+        } else {
+            client
+                .with_tools(catalogue.clone())
+                .with_tool_choice(ToolChoice::Auto)
+        };
+        let connected = tokio::select! {
+            () = round_cancellation.cancelled() => return None,
+            result = tokio::time::timeout(
+                PROVIDER_CONNECT_TIMEOUT,
+                client.stream_prompt(Prompt::Messages(messages.to_vec())),
+            ) => result,
+        };
+        match connected {
+            Ok(Ok(stream)) => Some(Ok(stream)),
+            // A refused request is reported rather than sent, because a
+            // refusal of a tools request is exactly the one the caller can
+            // still answer by asking again without them. The upstream's own
+            // words travel with it: a request this client is not allowed to
+            // send is indistinguishable from a model that cannot answer
+            // until someone reads the status and the body.
+            Ok(Err(error)) => Some(Err(format!(
+                "assistant provider connection failed: {error}"
+            ))),
+            Err(_) => Some(Err("assistant provider connection timed out".to_owned())),
+        }
+    };
+    run_tool_rounds(
+        open_round,
+        conversation,
+        &request_id,
+        offered,
+        tools.as_ref(),
+        &sender,
+        &cancellation,
+    )
+    .await;
 }
 
 /// A turn answered by a provider's own hosted search surface rather than by an
-/// `rs_ai` chat completion. Split out of the turn loop because a handoff to the
-/// search tier arrives here mid-turn.
+/// `rs_ai` chat completion.
 async fn run_hosted_turn(
     config: &AssistantProviderConfig,
     backend: &SearchBackend,
@@ -1178,8 +1156,7 @@ async fn run_tool_rounds<S, F>(
     tools: Option<&Arc<dyn AssistantTurnTools>>,
     sender: &mpsc::Sender<Result<AssistantProviderEvent, String>>,
     cancellation: &CancellationToken,
-) -> Option<Handoff>
-where
+) where
     S: futures::Stream<Item = Result<StreamEvent, AiError>> + Unpin,
     F: AsyncFnMut(bool, &[Message]) -> Option<Result<S, String>>,
 {
@@ -1192,7 +1169,7 @@ where
         // asked to respect is not a cap.
         let offer_tools = !degraded && round < MAX_TOOL_ROUNDS;
         let outcome = match open_round(offer_tools, &conversation).await {
-            None => return None,
+            None => return,
             Some(Ok(mut stream)) => {
                 run_tool_round(
                     &mut stream,
@@ -1210,19 +1187,7 @@ where
             },
         };
         match outcome {
-            ToolRoundOutcome::Done => return None,
-            // The escalating call is deliberately not carried: it asks a
-            // question only this loop can answer, and a model handed a tool
-            // call it cannot close reads it as an error.
-            ToolRoundOutcome::HandedOff { tier, spoken } => {
-                if spoken_anything || spoken {
-                    // The fast model already answered out loud, so there is
-                    // nothing left for a stronger one to say that would not be
-                    // said twice.
-                    break;
-                }
-                return Some(Handoff { tier, conversation });
-            }
+            ToolRoundOutcome::Done => return,
             ToolRoundOutcome::Continue { appended, spoken } => {
                 spoken_anything = spoken_anything || spoken;
                 conversation.extend(appended);
@@ -1236,7 +1201,7 @@ where
                 }
                 if degraded || !offer_tools {
                     let _ = sender.send(Err(message)).await;
-                    return None;
+                    return;
                 }
                 degraded = true;
                 conversation = messages.clone();
@@ -1252,14 +1217,6 @@ where
             final_segment: true,
         }))
         .await;
-    None
-}
-
-/// A turn the model asked a stronger one to finish, and everything it learned
-/// before asking.
-struct Handoff {
-    tier: ModelTier,
-    conversation: Vec<Message>,
 }
 
 enum ToolRoundOutcome {
@@ -1270,9 +1227,6 @@ enum ToolRoundOutcome {
         appended: Vec<Message>,
         spoken: bool,
     },
-    /// The model declined the turn and named who should take it. Nothing
-    /// terminal has been sent: the turn is not over, it moved.
-    HandedOff { tier: ModelTier, spoken: bool },
     /// The round could not be completed. Nothing terminal has been sent, so the
     /// caller still gets to decide between retrying and reporting.
     Failed { message: String, spoken: bool },
@@ -1284,7 +1238,6 @@ enum ToolRoundOutcome {
 #[derive(Clone, Copy)]
 struct OfferedTools {
     computer: bool,
-    escalation: bool,
 }
 
 /// A tool the turn never offered is not a tool the model may call, even when
@@ -1293,8 +1246,9 @@ struct OfferedTools {
 fn tool_call_is_offered(tool_name: &str, offered: OfferedTools, user_data_available: bool) -> bool {
     match tool_name {
         COMPUTER_INVOKE_TOOL | COMPUTER_SET_VALUE_TOOL | COMPUTER_OBSERVE_TOOL => offered.computer,
-        MEMORY_SEARCH_TOOL | PROFILE_READ_TOOL => user_data_available,
-        ESCALATE_TOOL => offered.escalation,
+        MEMORY_SEARCH_TOOL | PROFILE_READ_TOOL | CURRENTS_READ_TOOL | CURRENTS_WRITE_TOOL => {
+            user_data_available
+        }
         _ => false,
     }
 }
@@ -1368,12 +1322,6 @@ where
                     };
                 };
                 match tool_effect(&tool_name) {
-                    Some(ToolEffect::Handoff) => {
-                        return ToolRoundOutcome::HandedOff {
-                            tier: escalation_tier(&arguments),
-                            spoken: !spoken.is_empty(),
-                        };
-                    }
                     Some(ToolEffect::Read) => {
                         // Reading costs nobody an approval, so it runs now and
                         // its result rejoins the conversation. The empty delta
@@ -1400,6 +1348,47 @@ where
                         ));
                         continue;
                     }
+                    Some(ToolEffect::Write) if tool_name == CURRENTS_WRITE_TOOL => {
+                        // Writing a Current is a write to the user's own
+                        // account, so a turn with no account behind it says so
+                        // as a tool result the model can relay. Proposing an
+                        // approval that could only fail would be a worse lie
+                        // than the missing tool was.
+                        let signed_in = match tools {
+                            Some(tools) => tools.currents_account().await,
+                            None => false,
+                        };
+                        let refusal = if signed_in {
+                            match currents_write_proposal(request_id, &call_id, &arguments) {
+                                Ok((proposal, write)) => {
+                                    proposed = true;
+                                    let event = AssistantProviderEvent::Proposal(Box::new(
+                                        BoundActionProposal {
+                                            proposal,
+                                            bound_computer_action: None,
+                                            currents_write: Some(write),
+                                        },
+                                    ));
+                                    if sender.send(Ok(event)).await.is_err() {
+                                        return ToolRoundOutcome::Done;
+                                    }
+                                    continue;
+                                }
+                                Err(message) => message,
+                            }
+                        } else {
+                            CURRENTS_SIGNED_OUT.to_owned()
+                        };
+                        calls.push(ContentPart::ToolCall {
+                            call: ToolCallRequest {
+                                id: call_id.clone(),
+                                name: tool_name,
+                                arguments,
+                            },
+                        });
+                        results.push(Message::tool_result(call_id, refusal));
+                        continue;
+                    }
                     Some(ToolEffect::Write) => {
                         let event = match computer_use_proposal(
                             request_id, &call_id, &tool_name, arguments,
@@ -1420,6 +1409,7 @@ where
                                                     bound_computer_action: Some(
                                                         bound_computer_action,
                                                     ),
+                                                    currents_write: None,
                                                 },
                                             )))
                                         }
@@ -1548,6 +1538,19 @@ async fn run_read_only_tool(
                 Ok(Some(lines)) => lines,
                 Ok(None) => "Nothing is recorded about the user yet.".to_owned(),
                 Err(_) => "The user's profile could not be read.".to_owned(),
+            }
+        }
+        CURRENTS_READ_TOOL => {
+            let Some(tools) = tools else {
+                return "No Currents are available on this device.".to_owned();
+            };
+            if !tools.currents_account().await {
+                return CURRENTS_SIGNED_OUT.to_owned();
+            }
+            match tools.currents_read(cancellation.clone()).await {
+                Ok(Some(lines)) => lines,
+                Ok(None) => "The user has no Currents right now.".to_owned(),
+                Err(message) => format!("The user's Currents could not be read: {message}."),
             }
         }
         _ => "That tool is not available.".to_owned(),
@@ -1693,8 +1696,7 @@ fn note_generator(provider: Arc<dyn AssistantProvider>) -> crate::meeting::NoteG
 
 /// Wraps a provider configuration as the currents-brief generator.
 ///
-/// The brief is latency-sensitive presentation, so it runs on the SPEED tier
-/// rather than the configured chat model, and it runs against the same cloud
+/// The brief runs on the same text model as chat, against the same cloud
 /// provider dispatch every other generated surface uses — never the local
 /// Apple Foundation Models path, which does not compose chat-class documents.
 /// Tool calls are disabled: the brief authors a document, it never acts.
@@ -1710,7 +1712,7 @@ fn brief_generator(config: &AssistantProviderConfig) -> crate::brief::BriefGener
                 &provider,
                 "currents-brief",
                 &prompt,
-                ModelTier::Speed,
+                ModelTier::Balanced,
                 &cancellation,
             )
             .await
@@ -1720,10 +1722,10 @@ fn brief_generator(config: &AssistantProviderConfig) -> crate::brief::BriefGener
 
 /// Wraps a provider as the security screener's classifier.
 ///
-/// Screening is a small, fast, per-turn job whose whole answer is one JSON
-/// object, so it runs on the SPEED tier rather than the tier the turn itself
-/// routed to. Tool calls never arise: `generate_once` treats a proposal as a
-/// failure, which the screener retries and then reports as unavailable.
+/// Screening is a small, per-turn job whose whole answer is one JSON object,
+/// and it runs on the same text model as the turn it screens. Tool calls never
+/// arise: `generate_once` treats a proposal as a failure, which the screener
+/// retries and then reports as unavailable.
 fn security_classifier(provider: Arc<dyn AssistantProvider>) -> SecurityClassifier {
     Arc::new(move |prompt, cancellation| {
         let provider = Arc::clone(&provider);
@@ -1732,7 +1734,7 @@ fn security_classifier(provider: Arc<dyn AssistantProvider>) -> SecurityClassifi
                 &provider,
                 "security-screen",
                 &prompt,
-                ModelTier::Speed,
+                ModelTier::Balanced,
                 &cancellation,
             )
             .await
@@ -2632,10 +2634,12 @@ Do not mention being an AI unless the user asks. Do not use crepus artifacts or 
 the channel UI cannot render them.";
 
 const CHANNEL_TELEGRAM_FRAMING: &str = "Delivery channel: Telegram. Telegram allows a little \
-structure, but still avoid markdown — use line breaks sparingly instead of bullets.";
+structure, but still avoid markdown — put a blank line between distinct thoughts, and a code or \
+an instruction on its own line, instead of running everything into one paragraph or using bullets.";
 
 const CHANNEL_IMESSAGE_FRAMING: &str = "Delivery channel: iMessage/SMS. iMessage reads best as casual \
-texts — no lists, no tables, no emoji spam unless the user uses them first.";
+texts — no lists, no tables, no emoji spam unless the user uses them first. Start a new line for \
+each separate thought, and put a code or an instruction on its own line.";
 
 const OVERLAY_AGENT_FRAMING: &str = "You are the user's desktop agent, summoned from the quick \
 overlay on their Mac. Treat the message below as an instruction to act on this computer, not \
@@ -2662,29 +2666,35 @@ make them stop trusting you.";
 const CREPUS_ARTIFACTS_GUIDANCE: &str = "Reply guidelines — default to clear markdown prose with \
 actionable steps, recommendations, and context the user can follow. Most answers should be helpful \
 text first.\n\n\
-Use a ```crepus artifact only when a structured or interactive surface clearly beats prose — \
-numeric trends, side-by-side comparisons with tap actions, or a checklist the user will work \
-through. Do NOT default to artifacts for status pings, simple Q&A, dependency or config lists, \
-or instructions that read better as direct guidelines.\n\n\
+Do the thing; do not draw a picture of the thing. When the user asks for something you have a tool \
+for, call the tool — propose the concrete action or tool call for their approval instead of only \
+describing it. Never render a card whose only content is a link or a button standing in for work \
+you could have done in this turn. When you have no tool for what they asked, say that plainly in \
+one line; an honest sentence beats a card that looks like it acted.\n\n\
+NEVER chart numbers you do not have. Every value in a `sparkline` must come from a tool result in \
+this conversation or from figures the user themselves gave you, and the line must say where: \
+`source=tool:<tool_name>`. Charts without that marker are stripped before the artifact is drawn, \
+so an unsourced one simply disappears. If you do not have the numbers, call the tool that would \
+fetch them, or answer in prose. Never estimate, smooth, illustrate, or fill a gap in a series — a \
+plausible-looking trend the user cannot check is the fastest way to lose their trust.\n\n\
+Use a ```crepus artifact only when a structured or interactive surface clearly beats prose — a \
+checklist the user will work through, or side-by-side options with tap actions. Do NOT default to \
+artifacts for status pings, simple Q&A, dependency or config lists, numbers you would have to \
+invent, or instructions that read better as direct guidelines.\n\n\
 When you do use an artifact:\n\
 - Lead with substantive prose BEFORE the fence: explain what to do and why.\n\
 - Do NOT emit badge+list \"dashboards\" that repeat the same bullets as a faux status card.\n\
-- For metrics over time, use full-width `sparkline` (or progress/meter for a single ratio) with \
-real values — not placeholder activity feeds.\n\
 - Put structured content ONLY inside the artifact; never duplicate the same lists above and below \
 it.\n\n\
 Supported nodes: text, stack (row/col, gap-N), scroll, button, toggle, checkbox, progress, meter, \
-badge, divider, spacer, image, if, foreach, list, listitem, sparkline, timer.\n\n\
-Timers run. `timer \"Focus\" duration=25m autostart` renders a clock that actually counts down, \
-with its own start, pause and reset. Use it for anything time-bounded — pomodoro, a rest interval, \
-a countdown. Add `countup` for a stopwatch. Duration takes 90s, 25m, 1h.\n\n\
+badge, divider, spacer, image, if, foreach, list, listitem, sparkline.\n\n\
 NEVER fake a running clock with `progress`. A progress node is a number you wrote once; it does \
 not move. A card that says \"Session Active\" over a frozen 4% bar is worse than no card.\n\n\
-Sparkline (full-width trend — prefer this over list-only summaries when numbers exist):\n\
+Sparkline — only for values a tool already returned, and only with the tool named:\n\
 ```crepus\n\
 stack col gap-2\n\
   text \"Weekly focus hours\"\n\
-  sparkline color=blue variant=gradient values=6,8,7,11,9,13,12\n\
+  sparkline color=blue variant=gradient values=6,8,7,11,9,13,12 source=tool:memory_search\n\
   text \"Trending up — protect two deep-work blocks tomorrow.\"\n\
 ```\n\n\
 Actionable checklist with buttons (when the user will tap through steps):\n\
@@ -2702,9 +2712,15 @@ Data bindings: `text bind=fieldName` or `text \"{item.title}\"` inside `foreach 
 Actions: `onclick={prompt:...}`, `onclick={open:https://...}`, or `onclick={compute:...}` on \
 `button` or `listitem`. ONE verb per action, nothing else.\n\n\
 Do NOT invent other node kinds or verbs. When an artifact would not help, answer in normal markdown \
-only. When you create a Current with create_current, put a matching crepus infographic in the \
-crepus field (hero line + sparkline or progress when numeric, supporting actions) instead of a \
-plain title/summary badge wall.";
+only. When they ask you to update their Currents, call `currents_read` to see what is there and \
+then `currents_write` to propose the change for their approval — never a card with an \"Update \
+currents\" link that does nothing.";
+
+/// What a `currents_write` on a signed-out device says. Currents can be read
+/// without an account because the app mirrors them locally; creating one is a
+/// write to the account itself, and the user is told exactly that.
+const CURRENTS_SIGNED_OUT: &str = "Writing a Current needs a signed-in Omi account, and this device is signed out. Tell the user \
+they need to be signed in, and do not claim the Current was written.";
 
 fn framed_assistant_prompt(
     origin: Option<MessageOrigin>,
@@ -2903,6 +2919,119 @@ async fn cloud_memory_context(
     Ok((!items.is_empty()).then_some(items))
 }
 
+/// The user's own Currents on the worker. `/api/v1/currents` already carries
+/// `currents:read` and `currents:write`, and the session credential the
+/// managed memory recall was configured with is the same one it authenticates,
+/// so the hub reuses that client rather than opening a second door. No
+/// credential means no account: every caller here reports that rather than
+/// inventing an outcome.
+async fn currents_api(state: &Mutex<RuntimeState>) -> Option<(Url, String)> {
+    let config = state.lock().await.cloud_memory.clone()?;
+    let endpoint = config.endpoint.join("/api/v1/currents").ok()?;
+    Some((endpoint, config.credential))
+}
+
+async fn read_currents(
+    state: &Mutex<RuntimeState>,
+    cancellation: &CancellationToken,
+) -> Result<Option<String>, String> {
+    let Some((endpoint, credential)) = currents_api(state).await else {
+        return Ok(None);
+    };
+    let body = call_currents_api(
+        reqwest::Client::new().get(endpoint.clone()),
+        &endpoint,
+        &credential,
+        cancellation,
+    )
+    .await?;
+    let currents = body
+        .get("currents")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "the Currents response was invalid".to_owned())?;
+    let lines: Vec<String> = currents
+        .iter()
+        .filter_map(|current| {
+            let field = |name: &str| {
+                current
+                    .get(name)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned()
+            };
+            let title = field("title");
+            if title.is_empty() {
+                return None;
+            }
+            Some(format!(
+                "- {} [{}]: {} Next step: {}",
+                title,
+                field("id"),
+                field("summary"),
+                field("proposedNextStep")
+            ))
+        })
+        .collect();
+    Ok((!lines.is_empty()).then(|| lines.join("\n")))
+}
+
+async fn write_current(
+    state: &Mutex<RuntimeState>,
+    write: &CurrentsWrite,
+    cancellation: &CancellationToken,
+) -> Result<(), String> {
+    let Some((endpoint, credential)) = currents_api(state).await else {
+        return Err("writing a Current needs a signed-in account".to_owned());
+    };
+    call_currents_api(
+        reqwest::Client::new()
+            .post(endpoint.clone())
+            .json(&write.body()),
+        &endpoint,
+        &credential,
+        cancellation,
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn call_currents_api(
+    request: reqwest::RequestBuilder,
+    endpoint: &Url,
+    credential: &str,
+    cancellation: &CancellationToken,
+) -> Result<serde_json::Value, String> {
+    let endpoint_text = endpoint.to_string();
+    tokio::select! {
+        () = cancellation.cancelled() => return Err("the Currents request was cancelled".to_owned()),
+        result = endpoint_resolves_publicly(&endpoint_text) => result?,
+    }
+    let response = tokio::select! {
+        () = cancellation.cancelled() => return Err("the Currents request was cancelled".to_owned()),
+        result = tokio::time::timeout(
+            Duration::from_secs(15),
+            request.bearer_auth(credential).send(),
+        ) => result.map_err(|_| "the Currents request timed out".to_owned())?
+            .map_err(|_| "the Currents request failed".to_owned())?,
+    };
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > MAX_CLIENT_MEMORY_CONTEXT_BYTES as u64)
+    {
+        return Err("the Currents request was rejected".to_owned());
+    }
+    let bytes = tokio::select! {
+        () = cancellation.cancelled() => return Err("the Currents request was cancelled".to_owned()),
+        result = response.bytes() => result.map_err(|_| "the Currents request failed".to_owned())?,
+    };
+    if bytes.len() > MAX_CLIENT_MEMORY_CONTEXT_BYTES {
+        return Err("the Currents response was too large".to_owned());
+    }
+    serde_json::from_slice(&bytes).map_err(|_| "the Currents response was invalid".to_owned())
+}
+
 struct ProfileContext {
     lines: String,
 }
@@ -3026,6 +3155,19 @@ impl AssistantTurnTools for RuntimeAssistantTools {
             Ok((!lines.is_empty()).then(|| lines.join("\n")))
         })
     }
+
+    fn currents_read(
+        &self,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'static, Result<Option<String>, String>> {
+        let state = Arc::clone(&self.state);
+        Box::pin(async move { read_currents(state.as_ref(), &cancellation).await })
+    }
+
+    fn currents_account(&self) -> BoxFuture<'static, bool> {
+        let state = Arc::clone(&self.state);
+        Box::pin(async move { state.lock().await.cloud_memory.is_some() })
+    }
 }
 
 #[expect(
@@ -3044,10 +3186,8 @@ async fn dispatch_assistant(
 ) {
     let generation = state.lock().await.configuration_generation;
     let user_profile_path = state.lock().await.user_profile_path.clone();
-    // Every turn starts on the same tier. Which model should finish it is
-    // decided inside the turn by the model reading it, not out here by counting
-    // its characters — see `chat_router::FIRST_TIER`.
-    let routed_tier = FIRST_TIER;
+    // Every text turn runs on the one text tier.
+    let routed_tier = ModelTier::Balanced;
     if let Err(message) =
         client_context_within_limit(memory_context.as_deref(), MAX_CLIENT_MEMORY_CONTEXT_BYTES)
     {
@@ -3109,9 +3249,8 @@ async fn dispatch_assistant(
     // Online context is intentionally NOT de-identified: the cloud side has
     // to recognize the user across iMessage/Telegram channels, so identity
     // must survive the hop.
-    // Going online: the model router picks the tier (and therefore the model
-    // slug from `model_tier.rs`) for this prompt instead of a single fixed
-    // model, and the choice is reported alongside the online marker.
+    // Going online: the model slug comes from `model_tier.rs`, and is reported
+    // alongside the online marker.
     let routed_model = provider.model_for_tier(routed_tier);
     progress(
         request_id,
@@ -3308,6 +3447,7 @@ async fn dispatch_assistant(
                 let BoundActionProposal {
                     mut proposal,
                     bound_computer_action,
+                    currents_write,
                 } = *bound;
                 if proposal.request_id != request_id {
                     error(
@@ -3348,6 +3488,7 @@ async fn dispatch_assistant(
                     generation,
                     proposal,
                     prepared_computer_action,
+                    currents_write,
                 ) {
                     let (code, message) = match failure {
                         ProposalDecisionError::Capacity => (
@@ -5764,7 +5905,7 @@ async fn register_live_computer_use_tool_calls(
         if let Err(failure) =
             state
                 .proposals
-                .register_bound(&uid, generation, proposal, Some(prepared))
+                .register_bound(&uid, generation, proposal, Some(prepared), None)
         {
             let (code, message) = match failure {
                 ProposalDecisionError::Capacity => (
@@ -5903,7 +6044,16 @@ async fn decide_approval_with_availability(
             return;
         }
     };
-    approval_decision_acknowledgement(request_id, proposal_id, decision, true, action.is_some());
+    let approved_currents_write = (record.status == ProposalStatus::Approved)
+        .then(|| record.fingerprint.currents_write.clone())
+        .flatten();
+    approval_decision_acknowledgement(
+        request_id,
+        proposal_id,
+        decision,
+        true,
+        action.is_some() || approved_currents_write.is_some(),
+    );
     let Some(action) = action else {
         if authority_receipt.is_some() {
             error(
@@ -5912,6 +6062,34 @@ async fn decide_approval_with_availability(
                 "computer-use authority was supplied for a non-computer decision",
                 false,
             );
+            return;
+        }
+        if let Some(write) = approved_currents_write {
+            let status = match write_current(state, &write, cancellation).await {
+                Ok(()) => {
+                    progress(
+                        request_id,
+                        "currents_write",
+                        ToolStatus::Complete,
+                        Some("approved Current written"),
+                    );
+                    ProposalStatus::Succeeded
+                }
+                Err(message) => {
+                    error(
+                        Some(request_id.to_owned()),
+                        "currents_write_failed",
+                        &message,
+                        false,
+                    );
+                    ProposalStatus::Failed
+                }
+            };
+            state
+                .lock()
+                .await
+                .proposals
+                .finish_execution(proposal_id, status);
             return;
         }
         let detail = format!(
@@ -6150,9 +6328,12 @@ mod tests {
 
     /// A stand-in for the turn's runtime so the round loop can be tested
     /// without a memory database behind it.
+    #[derive(Default)]
     struct ScriptedTurnTools {
         memory: Option<String>,
         profile: Option<String>,
+        currents: Option<String>,
+        signed_in: bool,
     }
 
     impl AssistantTurnTools for ScriptedTurnTools {
@@ -6172,20 +6353,23 @@ mod tests {
             let profile = self.profile.clone();
             Box::pin(async move { Ok(profile) })
         }
+
+        fn currents_read(
+            &self,
+            _cancellation: CancellationToken,
+        ) -> BoxFuture<'static, Result<Option<String>, String>> {
+            let currents = self.currents.clone();
+            Box::pin(async move { Ok(currents) })
+        }
+
+        fn currents_account(&self) -> BoxFuture<'static, bool> {
+            let signed_in = self.signed_in;
+            Box::pin(async move { signed_in })
+        }
     }
 
-    const NO_HUB_TOOLS: OfferedTools = OfferedTools {
-        computer: false,
-        escalation: false,
-    };
-    const SCREEN_TOOLS: OfferedTools = OfferedTools {
-        computer: true,
-        escalation: false,
-    };
-    const HANDOFF_OFFERED: OfferedTools = OfferedTools {
-        computer: false,
-        escalation: true,
-    };
+    const NO_HUB_TOOLS: OfferedTools = OfferedTools { computer: false };
+    const SCREEN_TOOLS: OfferedTools = OfferedTools { computer: true };
 
     fn message_end() -> StreamEvent {
         StreamEvent::MessageEnd {
@@ -6228,7 +6412,7 @@ mod tests {
         let (sender, mut receiver) = mpsc::channel(16);
         let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
             memory: Some("- I work at Acme".to_owned()),
-            profile: None,
+            ..ScriptedTurnTools::default()
         });
         let mut events = tool_call(
             "call_1",
@@ -6270,12 +6454,248 @@ mod tests {
         )));
     }
 
+    fn currents_write_call() -> Vec<StreamEvent> {
+        let mut events = tool_call(
+            "call_1",
+            CURRENTS_WRITE_TOOL,
+            serde_json::json!({
+                "title": "Ship the installer",
+                "summary": "The installer is the last thing before the beta.",
+                "reason": "You said twice this week that the build is blocked.",
+                "proposed_next_step": "Cut a signed build and send it to the testers."
+            }),
+        );
+        events.push(message_end());
+        events
+    }
+
+    #[tokio::test]
+    async fn a_currents_write_is_proposed_for_approval_and_never_runs_in_the_round() {
+        assert_eq!(tool_effect(CURRENTS_WRITE_TOOL), Some(ToolEffect::Write));
+        let (sender, mut receiver) = mpsc::channel(16);
+        let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
+            signed_in: true,
+            ..ScriptedTurnTools::default()
+        });
+        let outcome = run_tool_round(
+            &mut scripted_stream(currents_write_call()),
+            "chat-currents-1",
+            NO_HUB_TOOLS,
+            Some(&tools),
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        // A write ends the round: nothing was sent to the worker, and the only
+        // thing the turn produced is a proposal for a human to decide about.
+        assert!(matches!(outcome, ToolRoundOutcome::Done));
+        let events = drain(&mut receiver);
+        let proposed = events
+            .iter()
+            .filter_map(|event| match event {
+                Ok(AssistantProviderEvent::Proposal(bound)) => Some(bound),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(proposed.len(), 1);
+        let bound = proposed[0];
+        assert_eq!(bound.proposal.proposal_id, "chat-currents-1:tool:call_1");
+        assert!(bound.proposal.computer_action.is_none());
+        assert!(bound.bound_computer_action.is_none());
+        let write = bound
+            .currents_write
+            .as_ref()
+            .unwrap_or_else(|| panic!("the Current is bound"));
+        assert_eq!(write.title, "Ship the installer");
+    }
+
+    #[tokio::test]
+    async fn a_currents_write_without_an_account_is_refused_in_words_the_model_can_relay() {
+        let (sender, mut receiver) = mpsc::channel(16);
+        let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools::default());
+        let outcome = run_tool_round(
+            &mut scripted_stream(currents_write_call()),
+            "chat-currents-2",
+            NO_HUB_TOOLS,
+            Some(&tools),
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        let ToolRoundOutcome::Continue { appended, .. } = outcome else {
+            panic!("a refused write continues the turn with the refusal");
+        };
+        assert!(matches!(
+            appended[1].content.first(),
+            Some(ContentPart::ToolResult { result })
+                if result.content.contains("signed-in") && result.content.contains("do not claim")
+        ));
+        // No proposal: a signed-out write is never put in front of the user.
+        assert!(
+            drain(&mut receiver)
+                .iter()
+                .all(|event| !matches!(event, Ok(AssistantProviderEvent::Proposal(_))))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_currents_read_answers_with_the_user_s_own_currents() {
+        let (sender, _receiver) = mpsc::channel(16);
+        let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
+            currents: Some("- Ship the installer [cur-1]: soon Next step: cut a build".to_owned()),
+            signed_in: true,
+            ..ScriptedTurnTools::default()
+        });
+        let mut events = tool_call("call_1", CURRENTS_READ_TOOL, serde_json::json!({}));
+        events.push(message_end());
+        let outcome = run_tool_round(
+            &mut scripted_stream(events),
+            "chat-currents-3",
+            NO_HUB_TOOLS,
+            Some(&tools),
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        let ToolRoundOutcome::Continue { appended, .. } = outcome else {
+            panic!("a read continues the turn");
+        };
+        assert!(matches!(
+            appended[1].content.first(),
+            Some(ContentPart::ToolResult { result }) if result.content.contains("cur-1")
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_approved_currents_write_reaches_the_public_currents_endpoint() {
+        let state = Arc::new(Mutex::new(RuntimeState {
+            authority_uid: Some("user-a".to_owned()),
+            cloud_memory: Some(CloudMemoryConfig {
+                endpoint: Url::parse("https://localhost/v1/memory/semantic-search")
+                    .unwrap_or_else(|_| panic!("endpoint")),
+                credential: "session-token".to_owned(),
+            }),
+            ..RuntimeState::default()
+        }));
+        let (endpoint, credential) = currents_api(state.as_ref())
+            .await
+            .unwrap_or_else(|| panic!("configured"));
+        assert_eq!(endpoint.as_str(), "https://localhost/api/v1/currents");
+        assert_eq!(credential, "session-token");
+        let write = CurrentsWrite {
+            title: "Ship the installer".to_owned(),
+            summary: "s".to_owned(),
+            reason: "r".to_owned(),
+            proposed_next_step: "n".to_owned(),
+        };
+        assert_eq!(
+            write.body(),
+            serde_json::json!({
+                "title": "Ship the installer",
+                "summary": "s",
+                "reason": "r",
+                "proposedNextStep": "n",
+            })
+        );
+
+        let (proposal, bound) = currents_write_proposal(
+            "chat-currents-4",
+            "call_1",
+            &serde_json::json!({
+                "title": "Ship the installer",
+                "summary": "s",
+                "reason": "r",
+                "proposed_next_step": "n"
+            }),
+        )
+        .unwrap_or_else(|_| panic!("proposal"));
+        let proposal_id = proposal.proposal_id.clone();
+        state
+            .lock()
+            .await
+            .proposals
+            .register_bound("user-a", 0, proposal, None, Some(bound))
+            .unwrap_or_else(|_| panic!("registered"));
+        // Rejecting writes nothing at all.
+        decide_approval_with_availability(
+            "chat-currents-4",
+            state.as_ref(),
+            &proposal_id,
+            ApprovalDecision::Reject,
+            None,
+            ApprovalExecutionContext {
+                generation: 0,
+                computer_use_is_available: false,
+            },
+            &CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(
+            state.lock().await.proposals.terminal[&proposal_id].status,
+            ProposalStatus::Rejected
+        );
+
+        // Approving sends it, and a send that could not complete is recorded as
+        // a failure rather than reported to the user as a written Current.
+        let (proposal, bound) = currents_write_proposal(
+            "chat-currents-5",
+            "call_1",
+            &serde_json::json!({
+                "title": "Ship the installer",
+                "summary": "s",
+                "reason": "r",
+                "proposed_next_step": "n"
+            }),
+        )
+        .unwrap_or_else(|_| panic!("proposal"));
+        let proposal_id = proposal.proposal_id.clone();
+        state
+            .lock()
+            .await
+            .proposals
+            .register_bound("user-a", 0, proposal, None, Some(bound))
+            .unwrap_or_else(|_| panic!("registered"));
+        decide_approval_with_availability(
+            "chat-currents-5",
+            state.as_ref(),
+            &proposal_id,
+            ApprovalDecision::ApproveOnce,
+            None,
+            ApprovalExecutionContext {
+                generation: 0,
+                computer_use_is_available: false,
+            },
+            &CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(
+            state.lock().await.proposals.terminal[&proposal_id].status,
+            ProposalStatus::Failed
+        );
+    }
+
+    #[tokio::test]
+    async fn a_currents_write_without_an_account_never_reaches_the_worker() {
+        let state = Arc::new(Mutex::new(RuntimeState::default()));
+        assert!(currents_api(state.as_ref()).await.is_none());
+        let write = CurrentsWrite {
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            reason: "r".to_owned(),
+            proposed_next_step: "n".to_owned(),
+        };
+        assert_eq!(
+            write_current(state.as_ref(), &write, &CancellationToken::new()).await,
+            Err("writing a Current needs a signed-in account".to_owned())
+        );
+    }
+
     #[tokio::test]
     async fn a_completed_tool_call_no_longer_ends_the_turn_as_incomplete() {
         let (sender, mut receiver) = mpsc::channel(16);
         let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
             memory: None,
-            profile: None,
+            ..ScriptedTurnTools::default()
         });
         let mut events = tool_call(
             "call_1",
@@ -6356,7 +6776,7 @@ mod tests {
         let (sender, mut receiver) = mpsc::channel(64);
         let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
             memory: Some("- I work at Acme".to_owned()),
-            profile: None,
+            ..ScriptedTurnTools::default()
         });
         let rounds = Arc::new(StdMutex::new(0_u32));
         let counted = Arc::clone(&rounds);
@@ -6412,7 +6832,7 @@ mod tests {
         let (sender, mut receiver) = mpsc::channel(64);
         let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
             memory: None,
-            profile: None,
+            ..ScriptedTurnTools::default()
         });
         let offers = Arc::new(StdMutex::new(Vec::new()));
         let recorded = Arc::clone(&offers);
@@ -6457,7 +6877,7 @@ mod tests {
         let (sender, mut receiver) = mpsc::channel(64);
         let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
             memory: None,
-            profile: None,
+            ..ScriptedTurnTools::default()
         });
         let open_round = async move |offer_tools: bool, _messages: &[Message]| {
             if offer_tools {
@@ -6529,7 +6949,7 @@ mod tests {
         let (sender, mut receiver) = mpsc::channel(64);
         let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
             memory: None,
-            profile: None,
+            ..ScriptedTurnTools::default()
         });
         let open_round = async move |_offer_tools: bool, _messages: &[Message]| {
             Some(Err::<
@@ -6552,153 +6972,21 @@ mod tests {
         assert!(drain(&mut receiver).iter().any(Result::is_err));
     }
 
-    #[tokio::test]
-    async fn a_turn_the_fast_model_answers_is_never_handed_on() {
-        let (sender, mut receiver) = mpsc::channel(64);
-        let open_round = async move |_offer_tools: bool, _messages: &[Message]| {
-            Some(Ok::<_, String>(scripted_stream(vec![
-                StreamEvent::TextDelta {
-                    delta: "it is Tuesday".to_owned(),
-                },
-                message_end(),
-            ])))
-        };
-        let handoff = run_tool_rounds(
-            open_round,
-            vec![Message::user("what day is it?")],
-            "chat-escalate-1",
-            HANDOFF_OFFERED,
-            None,
-            &sender,
-            &CancellationToken::new(),
-        )
-        .await;
-        assert!(handoff.is_none());
-        let events = drain(&mut receiver);
-        assert!(!events.iter().any(Result::is_err));
-        assert_eq!(spoken_text(&events), "it is Tuesday");
-    }
-
-    #[tokio::test]
-    async fn a_handoff_carries_what_the_fast_model_already_looked_up() {
-        let (sender, mut receiver) = mpsc::channel(64);
-        let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
-            memory: Some("- I work at Acme".to_owned()),
-            profile: None,
-        });
-        let rounds = Arc::new(StdMutex::new(0_u32));
-        let counted = Arc::clone(&rounds);
-        let open_round = async move |_offer_tools: bool, _messages: &[Message]| {
-            let mut count = counted
-                .lock()
-                .unwrap_or_else(|error_value| panic!("round count locks: {error_value}"));
-            *count += 1;
-            let first = *count == 1;
-            drop(count);
-            let mut events = if first {
-                tool_call(
-                    "call_1",
-                    MEMORY_SEARCH_TOOL,
-                    serde_json::json!({"query": "work"}),
-                )
-            } else {
-                tool_call(
-                    "call_2",
-                    ESCALATE_TOOL,
-                    serde_json::json!({"tier": "smart", "reason": "this needs real reasoning"}),
-                )
-            };
-            events.push(message_end());
-            Some(Ok::<_, String>(scripted_stream(events)))
-        };
-        let handoff = run_tool_rounds(
-            open_round,
-            vec![Message::user("should I leave Acme?")],
-            "chat-escalate-2",
-            HANDOFF_OFFERED,
-            Some(&tools),
-            &sender,
-            &CancellationToken::new(),
-        )
-        .await;
-        let handoff = handoff.unwrap_or_else(|| panic!("the turn was handed on"));
-        assert_eq!(handoff.tier, ModelTier::Smart);
-        // The lookup survives the handoff; the call that asked for the handoff
-        // does not, because the stronger model has no way to answer it.
-        assert!(handoff.conversation.len() > 1);
-        let carried = format!("{:?}", handoff.conversation);
-        assert!(carried.contains("Acme"));
-        assert!(!carried.contains(ESCALATE_TOOL));
-        // Nothing terminal reached the UI: the turn is not over, it moved.
-        let events = drain(&mut receiver);
-        assert!(!events.iter().any(Result::is_err));
-        assert!(!events.iter().any(|event| matches!(
-            event,
-            Ok(AssistantProviderEvent::Delta {
-                final_segment: true,
-                ..
-            })
-        )));
-    }
-
-    #[tokio::test]
-    async fn a_turn_that_was_already_handed_on_may_not_hand_it_on_again() {
-        // The stronger tier never offers `escalate`, so a model that names it
-        // anyway is calling something the turn did not offer — the same
-        // refusal any unoffered name gets, which costs the tools and not the
-        // answer.
-        assert!(tool_call_is_offered(ESCALATE_TOOL, HANDOFF_OFFERED, false));
-        assert!(!tool_call_is_offered(ESCALATE_TOOL, NO_HUB_TOOLS, true));
-
-        let (sender, mut receiver) = mpsc::channel(64);
-        let open_round = async move |offer_tools: bool, _messages: &[Message]| {
-            if offer_tools {
-                let mut events = tool_call(
-                    "call_1",
-                    ESCALATE_TOOL,
-                    serde_json::json!({"tier": "smart"}),
-                );
-                events.push(message_end());
-                return Some(Ok::<_, String>(scripted_stream(events)));
-            }
-            Some(Ok(scripted_stream(vec![
-                StreamEvent::TextDelta {
-                    delta: "here is the careful answer".to_owned(),
-                },
-                message_end(),
-            ])))
-        };
-        let handoff = run_tool_rounds(
-            open_round,
-            vec![Message::user("should I leave Acme?")],
-            "chat-escalate-3",
-            NO_HUB_TOOLS,
-            None,
-            &sender,
-            &CancellationToken::new(),
-        )
-        .await;
-        assert!(handoff.is_none());
-        let events = drain(&mut receiver);
-        assert!(!events.iter().any(Result::is_err));
-        assert_eq!(spoken_text(&events), "here is the careful answer");
-    }
-
     // A turn that has to be seen rather than read cannot be handed to a model
     // that cannot see. That is a fact about the input, so it is enforced before
     // any model is asked anything.
     #[test]
     fn a_tier_that_has_to_read_a_picture_says_so_before_it_is_dispatched() {
         assert!(required_capabilities(ModelTier::Multimodal).contains(&Capability::ImageIn));
-        assert!(!required_capabilities(ModelTier::Speed).contains(&Capability::ImageIn));
+        assert!(!required_capabilities(ModelTier::Balanced).contains(&Capability::ImageIn));
         let text_only = AssistantProviderConfig {
             kind: AssistantProviderKind::Worker,
-            model: crate::model_tier::DEFAULT_SPEED_MODEL.to_owned(),
+            model: crate::model_tier::DEFAULT_SEARCH_MODEL.to_owned(),
             credential: "token".to_owned(),
             endpoint: Some("https://example.invalid".to_owned()),
             tier_overrides: vec![(
                 ModelTier::Multimodal,
-                crate::model_tier::DEFAULT_SPEED_MODEL.to_owned(),
+                crate::model_tier::DEFAULT_SEARCH_MODEL.to_owned(),
             )],
         };
         assert!(
@@ -7295,6 +7583,7 @@ mod tests {
                         BoundActionProposal {
                             proposal,
                             bound_computer_action: None,
+                            currents_write: None,
                         },
                     ))))
                     .await;
@@ -7475,6 +7764,7 @@ mod tests {
                     expires_at_ms: Some(bound.bound.expires_at_ms),
                 },
                 Some(bound),
+                None,
             )
             .unwrap_or_else(|failure| panic!("proposal registers: {failure:?}"));
         let state = Mutex::new(runtime);
@@ -8826,6 +9116,7 @@ mod tests {
                     expires_at_ms: Some(i64::MAX),
                 },
                 Some(bound.clone()),
+                None,
             )
             .unwrap_or_else(|failure| panic!("proposal registers: {failure:?}"));
         assert_eq!(
@@ -8935,6 +9226,7 @@ mod tests {
                     expires_at_ms: Some(i64::MAX),
                 },
                 Some(bound),
+                None,
             )
             .unwrap_or_else(|failure| panic!("proposal registers: {failure:?}"));
         let state = Mutex::new(runtime);
@@ -9436,6 +9728,7 @@ mod tests {
                 AssistantProviderEvent::Proposal(Box::new(BoundActionProposal {
                     proposal: action_proposal("proposal-live", request_id, i64::MAX),
                     bound_computer_action: None,
+                    currents_write: None,
                 })),
                 AssistantProviderEvent::Delta {
                     text: "done".to_owned(),
@@ -9470,6 +9763,7 @@ mod tests {
                 BoundActionProposal {
                     proposal: action_proposal("proposal-cancelled", "chat-g7-2", i64::MAX),
                     bound_computer_action: None,
+                    currents_write: None,
                 },
             ))])),
         });

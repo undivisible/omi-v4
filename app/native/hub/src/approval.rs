@@ -1,3 +1,4 @@
+use crate::assistant_tools::CurrentsWrite;
 use crate::computer_use::PreparedComputerUseAction;
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ComputerUseAction, NativeEvent,
@@ -33,6 +34,9 @@ pub(crate) struct ProposalFingerprint {
     pub(crate) summary: String,
     pub(crate) computer_action: Option<ComputerUseAction>,
     pub(crate) bound_computer_action: Option<PreparedComputerUseAction>,
+    /// The Current an approved `currents_write` writes. It never leaves this
+    /// record until `decide` returns it as approved.
+    pub(crate) currents_write: Option<CurrentsWrite>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,7 +77,7 @@ impl ProposalRegistry {
         authority_generation: u64,
         proposal: ActionProposal,
     ) -> Result<ProposalRegistration, ProposalDecisionError> {
-        self.register_bound(uid, authority_generation, proposal, None)
+        self.register_bound(uid, authority_generation, proposal, None, None)
     }
 
     pub(crate) fn register_bound(
@@ -82,6 +86,7 @@ impl ProposalRegistry {
         authority_generation: u64,
         proposal: ActionProposal,
         bound_computer_action: Option<PreparedComputerUseAction>,
+        currents_write: Option<CurrentsWrite>,
     ) -> Result<ProposalRegistration, ProposalDecisionError> {
         let now_ms = unix_time_ms();
         self.purge_expired(now_ms);
@@ -102,6 +107,7 @@ impl ProposalRegistry {
             summary: proposal.summary.clone(),
             computer_action: proposal.computer_action.clone(),
             bound_computer_action,
+            currents_write,
         };
         if let Some(existing) = self
             .pending

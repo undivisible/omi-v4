@@ -10,7 +10,6 @@ mod capture_service;
 mod capture_upload;
 mod capture_wal;
 mod capture_wal_uploader;
-mod chat_router;
 mod computer_use;
 mod computer_use_tools;
 mod daily_review;

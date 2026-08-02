@@ -5,12 +5,12 @@
 //!
 //! | Tier         | When                                                      | Default model           | Provider |
 //! |--------------|-----------------------------------------------------------|-------------------------|----------|
-//! | `speed`      | latency-sensitive: live insights, classification, answers | inception/mercury-2 | Inception   |
-//! | `balanced`   | default (~80%): meeting notes, general chat               | xiaomi/mimo-v2.5    | MiMo     |
-//! | `smart`      | hard reasoning                                            | xiaomi/mimo-v2.5-pro         | MiMo     |
-//! | `multimodal` | vision / visual computer-use                              | google/gemini-3.6-flash      | Gemini   |
+//! | `speed`      | latency-sensitive: live insights, classification, answers | openai/gpt-5.6-luna | OpenAI   |
+//! | `balanced`   | default (~80%): meeting notes, general chat               | openai/gpt-5.6-luna | OpenAI   |
+//! | `smart`      | hard reasoning                                            | openai/gpt-5.6-luna          | OpenAI   |
+//! | `multimodal` | vision / visual computer-use                              | openai/gpt-5.6-luna          | OpenAI   |
 //! | `search`     | web-grounded answers (live search)                        | perplexity/sonar             | Perplexity |
-//! | `transcribe` | server-side speech-to-text (no hub on the caller)         | google/gemini-3.5-flash-lite | Gemini   |
+//! | `transcribe` | server-side speech-to-text (no hub on the caller)         | x-ai/grok-stt-1.0            | xAI      |
 //! | `speak`      | server-side text-to-speech                                | openai/gpt-audio-mini        | OpenAI   |
 //!
 //! The default ids are best-effort and may need correcting against the real
@@ -23,10 +23,10 @@
 //! [`select_model_for`] so an incapable model — table default or env override —
 //! is refused rather than silently handed input it cannot read.
 
-// The hub resolves the SPEED tier directly (its dev Gemini fallback); the
-// BALANCED model reaches meeting notes through the configured provider rather
-// than a tier lookup here, so those variants are unconstructed in this binary.
-// The full table is kept as the single source of truth mirrored by the worker.
+// Every text tier resolves to the same model; the BALANCED model reaches
+// meeting notes through the configured provider rather than a tier lookup here,
+// so some variants are unconstructed in this binary. The full table is kept as
+// the single source of truth mirrored by the worker.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ModelTier {
@@ -233,14 +233,14 @@ pub(crate) fn select_model_for(
     }))
 }
 
-/// Asynchronous audio (voice notes, WAL uploads, channel voice messages)
-/// prefers the balanced model: it takes audio input at half the transcribe
-/// tier's price, and the transcribe tier stays the fallback when an override
-/// leaves balanced text-only. Mirrors the worker's `asyncAudioTierPreference`.
+/// Asynchronous audio (voice notes, WAL uploads, channel voice messages) goes
+/// to the transcribe tier, and falls through to the text tiers only when an
+/// override leaves one of them able to take audio. Mirrors the worker's
+/// `asyncAudioTierPreference`.
 #[allow(dead_code)]
 pub(crate) const ASYNC_AUDIO_TIER_PREFERENCE: &[ModelTier] = &[
-    ModelTier::Balanced,
     ModelTier::Transcribe,
+    ModelTier::Balanced,
     ModelTier::Multimodal,
 ];
 
@@ -295,10 +295,10 @@ mod tests {
     #[test]
     fn audio_tiers_declare_audio_and_text_tiers_do_not() {
         let empty = |_: &str| None;
-        assert!(capabilities_of(DEFAULT_BALANCED_MODEL, empty).contains(&Capability::AudioIn));
         assert!(capabilities_of(DEFAULT_TRANSCRIBE_MODEL, empty).contains(&Capability::AudioIn));
         assert!(capabilities_of(DEFAULT_MULTIMODAL_MODEL, empty).contains(&Capability::ImageIn));
         assert!(capabilities_of(DEFAULT_SPEAK_MODEL, empty).contains(&Capability::AudioOut));
+        assert!(!capabilities_of(DEFAULT_BALANCED_MODEL, empty).contains(&Capability::AudioIn));
         assert!(!capabilities_of(DEFAULT_SPEED_MODEL, empty).contains(&Capability::AudioIn));
         assert!(!capabilities_of(DEFAULT_SMART_MODEL, empty).contains(&Capability::AudioIn));
     }
@@ -356,26 +356,40 @@ mod tests {
     }
 
     #[test]
-    fn asynchronous_audio_prefers_the_balanced_model() {
+    fn asynchronous_audio_reaches_a_model_that_can_hear_it() {
         let empty = |_: &str| None;
         assert_eq!(
             select_model_for(&[Capability::AudioIn], ASYNC_AUDIO_TIER_PREFERENCE, empty),
-            Ok((ModelTier::Balanced, DEFAULT_BALANCED_MODEL.to_owned()))
+            Ok((ModelTier::Transcribe, DEFAULT_TRANSCRIBE_MODEL.to_owned()))
         );
-        // A balanced override that cannot take audio falls through to the next
-        // preferred tier rather than being handed the audio anyway.
+        // A transcribe override that cannot take audio is refused rather than
+        // falling through to a text model that would answer about audio it
+        // never received.
         let text_only = |name: &str| match name {
-            "OMI_MODEL_BALANCED" => Some(DEFAULT_SPEED_MODEL.to_owned()),
+            "OMI_MODEL_TRANSCRIBE" => Some(DEFAULT_SMART_MODEL.to_owned()),
             _ => None,
         };
-        assert_eq!(
+        assert!(
             select_model_for(
                 &[Capability::AudioIn],
                 ASYNC_AUDIO_TIER_PREFERENCE,
                 text_only
-            ),
-            Ok((ModelTier::Transcribe, DEFAULT_TRANSCRIBE_MODEL.to_owned()))
+            )
+            .is_err()
         );
+    }
+
+    #[test]
+    fn every_text_tier_resolves_to_the_one_text_model() {
+        let empty = |_: &str| None;
+        for tier in [
+            ModelTier::Speed,
+            ModelTier::Balanced,
+            ModelTier::Smart,
+            ModelTier::Multimodal,
+        ] {
+            assert_eq!(model_for_tier(tier, empty), "openai/gpt-5.6-luna");
+        }
     }
 
     #[test]

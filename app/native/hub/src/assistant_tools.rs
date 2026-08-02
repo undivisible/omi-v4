@@ -1,12 +1,15 @@
 use crate::computer_use::Observation;
-use crate::computer_use_tools::{COMPUTER_INVOKE_TOOL, COMPUTER_SET_VALUE_TOOL, valid_call_id};
-use crate::model_tier::ModelTier;
+use crate::computer_use_tools::{
+    COMPUTER_INVOKE_TOOL, COMPUTER_SET_VALUE_TOOL, COMPUTER_USE_PROPOSAL_TTL_MS, valid_call_id,
+};
+use crate::signals::{ActionProposal, ActionRisk};
 use rs_ai_core::ToolDefinition;
 
 pub(crate) const COMPUTER_OBSERVE_TOOL: &str = "computer_observe";
 pub(crate) const MEMORY_SEARCH_TOOL: &str = "memory_search";
 pub(crate) const PROFILE_READ_TOOL: &str = "profile_read";
-pub(crate) const ESCALATE_TOOL: &str = "escalate";
+pub(crate) const CURRENTS_READ_TOOL: &str = "currents_read";
+pub(crate) const CURRENTS_WRITE_TOOL: &str = "currents_write";
 
 /// How many times a turn may call tools and come back for more before it has
 /// to answer with what it has. Four covers the deepest sequence the desktop
@@ -32,18 +35,88 @@ pub(crate) const MAX_TOOL_RESULT_BYTES: usize = 8 * 1024;
 pub(crate) enum ToolEffect {
     Read,
     Write,
-    /// Changes nothing and answers nothing: it ends the round so the same
-    /// conversation can be asked again of a stronger model.
-    Handoff,
 }
 
 pub(crate) fn tool_effect(tool_name: &str) -> Option<ToolEffect> {
     match tool_name {
-        COMPUTER_OBSERVE_TOOL | MEMORY_SEARCH_TOOL | PROFILE_READ_TOOL => Some(ToolEffect::Read),
-        COMPUTER_INVOKE_TOOL | COMPUTER_SET_VALUE_TOOL => Some(ToolEffect::Write),
-        ESCALATE_TOOL => Some(ToolEffect::Handoff),
+        COMPUTER_OBSERVE_TOOL | MEMORY_SEARCH_TOOL | PROFILE_READ_TOOL | CURRENTS_READ_TOOL => {
+            Some(ToolEffect::Read)
+        }
+        COMPUTER_INVOKE_TOOL | COMPUTER_SET_VALUE_TOOL | CURRENTS_WRITE_TOOL => {
+            Some(ToolEffect::Write)
+        }
         _ => None,
     }
+}
+
+/// The Current a `currents_write` call asked to create, in the field names the
+/// worker's `POST /api/v1/currents` validates. It is carried through the
+/// approval ledger rather than sent when the model asks for it: nothing here
+/// reaches the account until a human says yes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CurrentsWrite {
+    pub(crate) title: String,
+    pub(crate) summary: String,
+    pub(crate) reason: String,
+    pub(crate) proposed_next_step: String,
+}
+
+impl CurrentsWrite {
+    pub(crate) fn body(&self) -> serde_json::Value {
+        serde_json::json!({
+            "title": self.title,
+            "summary": self.summary,
+            "reason": self.reason,
+            "proposedNextStep": self.proposed_next_step,
+        })
+    }
+}
+
+/// Builds the proposal a `currents_write` call registers for approval. The
+/// worker's own limits are applied here so a call that could only be rejected
+/// costs a sentence rather than an approval the user has to read.
+pub(crate) fn currents_write_proposal(
+    request_id: &str,
+    call_id: &str,
+    arguments: &serde_json::Value,
+) -> Result<(ActionProposal, CurrentsWrite), String> {
+    if !valid_call_id(call_id) {
+        return Err("currents_write was called with an invalid call id.".to_owned());
+    }
+    let field = |name: &str, limit: usize| -> Result<String, String> {
+        let value = arguments
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if value.is_empty() || value.chars().count() > limit {
+            return Err(format!(
+                "currents_write needs a {name} of 1 to {limit} characters."
+            ));
+        }
+        Ok(value.to_owned())
+    };
+    let write = CurrentsWrite {
+        title: field("title", 120)?,
+        summary: field("summary", 500)?,
+        reason: field("reason", 500)?,
+        proposed_next_step: field("proposed_next_step", 500)?,
+    };
+    let proposal = ActionProposal {
+        proposal_id: format!("{request_id}:tool:{call_id}"),
+        request_id: request_id.to_owned(),
+        title: "Write a Current".to_owned(),
+        summary: format!("{} — {}", write.title, write.proposed_next_step),
+        risk: ActionRisk::External,
+        computer_action: None,
+        operation_id: None,
+        action_hash: None,
+        target_provenance: None,
+        expires_at_ms: Some(
+            crate::approval::unix_time_ms().saturating_add(COMPUTER_USE_PROPOSAL_TTL_MS),
+        ),
+    };
+    Ok((proposal, write))
 }
 
 pub(crate) fn valid_tool_identity(call_id: &str, tool_name: &str) -> bool {
@@ -64,41 +137,6 @@ pub(crate) fn computer_observe_tool() -> ToolDefinition {
             "properties": {},
         }),
         examples: None,
-    }
-}
-
-/// How the fast model gets rid of a turn it should not be answering.
-///
-/// This is the whole tier decision. The alternative was to guess from outside —
-/// count the prompt's characters, match a keyword — which cannot tell a hard
-/// short question from an easy long one. Mercury reads the question, and the
-/// only thing it is asked to judge is whether it is the right model for it.
-pub(crate) fn escalate_tool() -> ToolDefinition {
-    ToolDefinition {
-        name: ESCALATE_TOOL.to_owned(),
-        description:
-            "Hand this turn to a stronger model instead of answering it yourself. Call this as the first thing you do, before saying anything, whenever the turn needs careful reasoning, long-form writing, code, or facts newer than your training — `smart` for reasoning and writing, `search` for anything that depends on what is true on the web right now. Answer normally when you can do it well"
-                .to_owned(),
-        parameters: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "tier": {"type": "string", "enum": ["smart", "search"]},
-                "reason": {"type": "string"}
-            },
-            "required": ["tier"]
-        }),
-        examples: None,
-    }
-}
-
-/// The tier an `escalate` call asks for. An unrecognised or missing name is the
-/// stronger general model rather than a refusal: the model has already said it
-/// is the wrong one for this turn, and arguing about the spelling of the
-/// handoff would strand the turn on it.
-pub(crate) fn escalation_tier(arguments: &serde_json::Value) -> ModelTier {
-    match arguments.get("tier").and_then(serde_json::Value::as_str) {
-        Some("search") => ModelTier::Search,
-        _ => ModelTier::Smart,
     }
 }
 
@@ -125,6 +163,34 @@ pub(crate) fn user_data_tools() -> Vec<ToolDefinition> {
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {},
+            }),
+            examples: None,
+        },
+        ToolDefinition {
+            name: CURRENTS_READ_TOOL.to_owned(),
+            description:
+                "List the user's Currents — the things Omi is currently tracking for them, with each one's title, summary and proposed next step"
+                    .to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {},
+            }),
+            examples: None,
+        },
+        ToolDefinition {
+            name: CURRENTS_WRITE_TOOL.to_owned(),
+            description:
+                "Propose writing a new Current to the user's account, for their approval. Read the existing Currents first so a change to one is written as its successor rather than as a duplicate"
+                    .to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "proposed_next_step": {"type": "string"}
+                },
+                "required": ["title", "summary", "reason", "proposed_next_step"]
             }),
             examples: None,
         },
@@ -214,7 +280,8 @@ mod tests {
             tool_effect(COMPUTER_SET_VALUE_TOOL),
             Some(ToolEffect::Write)
         );
-        assert_eq!(tool_effect(ESCALATE_TOOL), Some(ToolEffect::Handoff));
+        assert_eq!(tool_effect(CURRENTS_READ_TOOL), Some(ToolEffect::Read));
+        assert_eq!(tool_effect(CURRENTS_WRITE_TOOL), Some(ToolEffect::Write));
         assert_eq!(tool_effect("bash"), None);
         assert!(!valid_tool_identity("call_1", "bash"));
         assert!(!valid_tool_identity("call/1", COMPUTER_OBSERVE_TOOL));
@@ -263,24 +330,45 @@ mod tests {
     }
 
     #[test]
-    fn a_handoff_names_a_stronger_tier_and_never_the_one_it_came_from() {
+    fn a_currents_write_is_proposed_with_every_field_the_worker_requires() {
+        let arguments = serde_json::json!({
+            "title": " Ship the installer ",
+            "summary": "The desktop installer is the last thing between the beta and users.",
+            "reason": "You said twice this week that the build is blocked on packaging.",
+            "proposed_next_step": "Cut a signed build and send it to the three testers."
+        });
+        let (proposal, write) = currents_write_proposal("chat-1", "call_1", &arguments)
+            .unwrap_or_else(|_| panic!("proposal"));
+        assert_eq!(proposal.proposal_id, "chat-1:tool:call_1");
+        assert_eq!(proposal.request_id, "chat-1");
+        assert_eq!(proposal.risk, ActionRisk::External);
+        assert!(proposal.computer_action.is_none());
+        assert_eq!(write.title, "Ship the installer");
+        let body = write.body();
+        assert_eq!(body["title"], "Ship the installer");
         assert_eq!(
-            escalation_tier(&serde_json::json!({"tier": "search"})),
-            ModelTier::Search
+            body["proposedNextStep"],
+            "Cut a signed build and send it to the three testers."
         );
-        assert_eq!(
-            escalation_tier(&serde_json::json!({"tier": "smart"})),
-            ModelTier::Smart
-        );
-        // A turn Mercury has already declined never lands back on Mercury,
-        // whatever it wrote in the argument.
-        for arguments in [
-            serde_json::json!({}),
-            serde_json::json!({"tier": "speed"}),
-            serde_json::json!({"tier": 7}),
-        ] {
-            assert_ne!(escalation_tier(&arguments), ModelTier::Speed);
+    }
+
+    #[test]
+    fn a_currents_write_missing_a_field_is_refused_before_it_costs_an_approval() {
+        let complete = serde_json::json!({
+            "title": "t",
+            "summary": "s",
+            "reason": "r",
+            "proposed_next_step": "n"
+        });
+        assert!(currents_write_proposal("chat-1", "call/1", &complete).is_err());
+        for field in ["title", "summary", "reason", "proposed_next_step"] {
+            let mut arguments = complete.clone();
+            arguments[field] = serde_json::json!("   ");
+            assert!(currents_write_proposal("chat-1", "call_1", &arguments).is_err());
         }
+        let mut too_long = complete.clone();
+        too_long["title"] = serde_json::json!("t".repeat(121));
+        assert!(currents_write_proposal("chat-1", "call_1", &too_long).is_err());
     }
 
     #[test]

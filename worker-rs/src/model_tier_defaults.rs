@@ -3,8 +3,8 @@
 use super::ModelCapability;
 use super::ModelCapability::{AudioIn, AudioOut, ImageIn, Text};
 
-pub const DEFAULT_SPEED_MODEL: &str = "inception/mercury-2";
-pub const DEFAULT_BALANCED_MODEL: &str = "xiaomi/mimo-v2.5";
+pub const DEFAULT_SPEED_MODEL: &str = "openai/gpt-5.6-luna";
+pub const DEFAULT_BALANCED_MODEL: &str = "openai/gpt-5.6-luna";
 pub const DEFAULT_SMART_MODEL: &str = "openai/gpt-5.6-luna";
 pub const DEFAULT_MULTIMODAL_MODEL: &str = "openai/gpt-5.6-luna";
 pub const DEFAULT_SEARCH_MODEL: &str = "perplexity/sonar";

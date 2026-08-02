@@ -136,12 +136,12 @@ pub fn completion_tier_for_model(
 //
 // | Tier       | When                                                      | Default model         | Provider |
 // |------------|-----------------------------------------------------------|-----------------------|----------|
-// | speed      | latency-sensitive: live insights, classification, answers | inception/mercury-2 | Inception   |
-// | balanced   | default (~80%): meeting notes, general chat               | xiaomi/mimo-v2.5          | MiMo     |
-// | smart      | hard reasoning                                            | xiaomi/mimo-v2.5-pro           | MiMo     |
-// | multimodal | vision / visual computer-use                              | google/gemini-3.6-flash         | Gemini   |
+// | speed      | latency-sensitive: live insights, classification, answers | openai/gpt-5.6-luna | OpenAI   |
+// | balanced   | default (~80%): meeting notes, general chat               | openai/gpt-5.6-luna       | OpenAI   |
+// | smart      | hard reasoning                                            | openai/gpt-5.6-luna            | OpenAI   |
+// | multimodal | vision / visual computer-use                              | openai/gpt-5.6-luna             | OpenAI   |
 // | search     | web-grounded answers (live search)                        | perplexity/sonar                | Perplexity |
-// | transcribe | server-side speech-to-text (no hub on the caller)         | google/gemini-3.5-flash-lite    | Gemini   |
+// | transcribe | server-side speech-to-text (no hub on the caller)         | x-ai/grok-stt-1.0               | xAI      |
 // | speak      | server-side text-to-speech                                | openai/gpt-audio-mini           | OpenAI   |
 //
 // The default ids are best-effort and may need correcting against the real
@@ -248,10 +248,9 @@ impl ModelCapability {
     }
 }
 
-/// Asynchronous audio (voice notes on a channel, WAL uploads, API uploads)
-/// prefers the balanced model: it accepts audio input at $0.14/M, half the
-/// transcribe tier's price, and the transcribe tier remains the fallback when
-/// an override leaves balanced text-only.
+/// Asynchronous audio (voice notes on a channel, WAL uploads, API uploads) goes
+/// to the transcribe tier, and falls through to the text tiers only when an
+/// override leaves one of them able to take audio.
 pub const ASYNC_AUDIO_TIER_PREFERENCE: &[ModelTier] = &[
     ModelTier::Transcribe,
     ModelTier::Balanced,
@@ -1349,12 +1348,17 @@ mod tests {
     fn the_audio_tiers_declare_audio_and_the_text_tiers_do_not() {
         let env = |_: &str| None;
         assert!(
-            capabilities_of(env, &model_for_tier(ModelTier::Balanced, env))
+            capabilities_of(env, &model_for_tier(ModelTier::Transcribe, env))
                 .contains(&ModelCapability::AudioIn)
         );
         assert!(
-            capabilities_of(env, &model_for_tier(ModelTier::Transcribe, env))
-                .contains(&ModelCapability::AudioIn)
+            select_model_for(
+                env,
+                &[ModelCapability::AudioIn],
+                ASYNC_AUDIO_TIER_PREFERENCE
+            )
+            .is_ok(),
+            "asynchronous audio has a tier that can hear it"
         );
         assert!(
             capabilities_of(env, &model_for_tier(ModelTier::Multimodal, env))
@@ -1362,7 +1366,12 @@ mod tests {
         );
         assert!(capabilities_of(env, &model_for_tier(ModelTier::Speak, env))
             .contains(&ModelCapability::AudioOut));
-        for tier in [ModelTier::Speed, ModelTier::Smart, ModelTier::Search] {
+        for tier in [
+            ModelTier::Speed,
+            ModelTier::Balanced,
+            ModelTier::Smart,
+            ModelTier::Search,
+        ] {
             assert!(
                 !model_supports(env, &model_for_tier(tier, env), &[ModelCapability::AudioIn]),
                 "tier {} should not declare audioIn",

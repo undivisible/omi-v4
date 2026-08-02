@@ -2,8 +2,8 @@
 
 use super::Capability;
 
-pub(crate) const DEFAULT_SPEED_MODEL: &str = "inception/mercury-2";
-pub(crate) const DEFAULT_BALANCED_MODEL: &str = "xiaomi/mimo-v2.5";
+pub(crate) const DEFAULT_SPEED_MODEL: &str = "openai/gpt-5.6-luna";
+pub(crate) const DEFAULT_BALANCED_MODEL: &str = "openai/gpt-5.6-luna";
 pub(crate) const DEFAULT_SMART_MODEL: &str = "openai/gpt-5.6-luna";
 pub(crate) const DEFAULT_MULTIMODAL_MODEL: &str = "openai/gpt-5.6-luna";
 pub(crate) const DEFAULT_SEARCH_MODEL: &str = "perplexity/sonar";
