@@ -76,11 +76,11 @@ final class AuthController extends ChangeNotifier {
     // spent the moment the Worker answers, so a failure here must not be
     // reported as a bad code — that reading sends the user back to the bot for
     // another one when the session they already have is fine.
-    _authenticated(
-      session,
-      consentGranted: true,
-      processingConsent: await _receiptFor(session.uid).catchError((_) => false),
-    );
+    ProcessingConsentReceipt? receipt;
+    try {
+      receipt = await _receiptFor(session.uid);
+    } catch (_) {}
+    _authenticated(session, consentGranted: true, processingConsent: receipt);
   }
 
   Future<void> restoreSession() async {
