@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'auth_gateway.dart';
 import 'auth_models.dart';
 import 'consent_store.dart';
+import 'worker_auth_gateway.dart';
 
 // Groundwork for granting processing consent automatically at sign-in.
 // Intentionally false for now; intended to default on later so signing in
@@ -46,6 +47,18 @@ final class AuthController extends ChangeNotifier {
       _gateway.supportsDesktopBrowserHandoff;
 
   bool get supportsChannelCode => _gateway.supportsChannelCode;
+
+  /// Set when the session is live but this device could not store the
+  /// credential that would restore it, or could not read one back. Signing in
+  /// still succeeded, so this is reported alongside the session rather than as
+  /// a failure of it.
+  String? get credentialPersistenceFailure {
+    final gateway = _gateway;
+    if (gateway case final CredentialPersistenceReporter reporter) {
+      return reporter.credentialPersistenceFailure;
+    }
+    return null;
+  }
 
   /// Redeems a code the Omi bot sent over Telegram or iMessage.
   Future<void> signInWithChannelCode(String code) async {

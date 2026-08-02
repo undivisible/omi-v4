@@ -20,6 +20,27 @@ final class _MemoryStore implements WorkerAuthCredentialStore {
   Future<void> clear() async => value = null;
 }
 
+final class _BrokenStore implements WorkerAuthCredentialStore {
+  _BrokenStore({this.onRead = false, this.onWrite = false});
+
+  final bool onRead;
+  final bool onWrite;
+
+  @override
+  Future<String?> read() async {
+    if (onRead) throw StateError('keychain refused the read');
+    return 'stored-refresh';
+  }
+
+  @override
+  Future<void> write(String refreshToken) async {
+    if (onWrite) throw StateError('keychain refused the write');
+  }
+
+  @override
+  Future<void> clear() async {}
+}
+
 void main() {
   final origin = Uri.parse('https://api.example.com');
 
@@ -32,7 +53,7 @@ void main() {
 
   WorkerAuthGateway gatewayFor(
     Future<http.Response> Function(http.Request request) handler, {
-    _MemoryStore? store,
+    WorkerAuthCredentialStore? store,
     DateTime Function()? now,
   }) => WorkerAuthGateway(
     apiOrigin: origin,
@@ -132,6 +153,59 @@ void main() {
     expect(jsonDecode(seen.body), {'refreshToken': 'stored-refresh'});
     expect(session?.uid, 'u2');
     expect(store.value, 'refresh-token');
+  });
+
+  test('a keychain that refuses the write still hands back the session it '
+      'was given, and says so', () async {
+    final gateway = gatewayFor(
+      (request) async => http.Response(credentials(), 200),
+      store: _BrokenStore(onWrite: true),
+    );
+
+    final session = await gateway.signInWithChannelCode('ab12cd3');
+
+    expect(session.uid, 'u1');
+    expect(gateway.currentSession?.uid, 'u1');
+    expect(gateway.credentialPersistenceFailure, isNotNull);
+  });
+
+  test('a keychain that accepts the write reports nothing to fix', () async {
+    final gateway = gatewayFor(
+      (request) async => http.Response(credentials(), 200),
+      store: _MemoryStore(),
+    );
+
+    await gateway.signInWithChannelCode('ab12cd3');
+
+    expect(gateway.credentialPersistenceFailure, isNull);
+  });
+
+  test('a keychain that refuses the read is reported, not mistaken for an '
+      'empty one', () async {
+    final gateway = gatewayFor(
+      (request) async => http.Response(credentials(), 200),
+      store: _BrokenStore(onRead: true),
+    );
+
+    expect(await gateway.restoreSession(), isNull);
+    expect(gateway.credentialPersistenceFailure, isNotNull);
+  });
+
+  test('a session written by one launch is restored by the next', () async {
+    final store = _MemoryStore();
+    final signIn = gatewayFor(
+      (request) async => http.Response(credentials(), 200),
+      store: store,
+    );
+    await signIn.signInWithChannelCode('ab12cd3');
+
+    final relaunch = gatewayFor(
+      (request) async => http.Response(credentials(uid: 'u1'), 200),
+      store: store,
+    );
+
+    expect((await relaunch.restoreSession())?.uid, 'u1');
+    expect(relaunch.credentialPersistenceFailure, isNull);
   });
 
   test('a refresh token the worker rejects is dropped rather than retried '

@@ -17,10 +17,25 @@ abstract interface class WorkerAuthCredentialStore {
   Future<void> clear();
 }
 
+/// A gateway that can say whether this device managed to remember the
+/// credential, so a sign-in that worked but will not survive a relaunch can be
+/// shown as exactly that instead of being discovered next launch.
+abstract interface class CredentialPersistenceReporter {
+  String? get credentialPersistenceFailure;
+}
+
 final class SecureWorkerAuthCredentialStore
     implements WorkerAuthCredentialStore {
   const SecureWorkerAuthCredentialStore([
-    this._storage = const FlutterSecureStorage(),
+    this._storage = const FlutterSecureStorage(
+      // macOS is not sandboxed here and is signed for development, so it has
+      // no keychain-access-group entitlement — and the data protection
+      // keychain refuses every write without one (errSecMissingEntitlement,
+      // -34018). Adding the entitlement is worse than useless: without a
+      // matching provisioning profile the process is killed on launch. The
+      // file keychain accepts the item and returns it across launches.
+      mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+    ),
   ]);
 
   static const _key = 'omi_worker_refresh_token';
@@ -50,7 +65,8 @@ final class SecureWorkerAuthCredentialStore
 /// Two credentials come back and are treated differently, matching how the
 /// Worker issues them: the access token is short-lived and held in memory, the
 /// refresh token is opaque, persisted, and revocable server-side.
-final class WorkerAuthGateway implements AuthGateway {
+final class WorkerAuthGateway
+    implements AuthGateway, CredentialPersistenceReporter {
   WorkerAuthGateway({
     required this.apiOrigin,
     WorkerAuthCredentialStore? store,
@@ -68,6 +84,10 @@ final class WorkerAuthGateway implements AuthGateway {
   final _sessions = StreamController<AuthSession?>.broadcast();
   AuthSession? _session;
   String? _refreshToken;
+  String? _credentialPersistenceFailure;
+
+  @override
+  String? get credentialPersistenceFailure => _credentialPersistenceFailure;
 
   /// A code that is plausibly one of ours. The Worker normalises and checks it
   /// properly; this only avoids spending an attempt on an obvious typo.
@@ -114,12 +134,21 @@ final class WorkerAuthGateway implements AuthGateway {
   /// locked keychain, a denied prompt. None of those mean "signed out
   /// permanently", but all of them mean there is no credential to offer now,
   /// and none of them should take the app down on launch.
+  ///
+  /// A failed read is recorded rather than passed off as an empty keychain, so
+  /// that a device which cannot reach its credential is distinguishable from
+  /// one that was never signed in on.
   Future<String?> _storedRefreshToken() async {
     try {
       // Launch must not wait on the keychain. A prompt the user never answers
       // would otherwise hold the app on its restoring frame indefinitely.
-      return await _store.read().timeout(_keychainTimeout);
+      final stored = await _store.read().timeout(_keychainTimeout);
+      _credentialPersistenceFailure = null;
+      return stored;
     } catch (_) {
+      _credentialPersistenceFailure =
+          'This device could not read its saved sign-in. '
+          'Ask the bot for a new code.';
       return null;
     }
   }
@@ -230,7 +259,12 @@ final class WorkerAuthGateway implements AuthGateway {
     // the session in hand.
     try {
       await _store.write(_refreshToken!);
-    } catch (_) {}
+      _credentialPersistenceFailure = null;
+    } catch (_) {
+      _credentialPersistenceFailure =
+          'Signed in, but this device could not remember it. '
+          'You will need a new code next time the app starts.';
+    }
     _session = session;
     _sessions.add(session);
     return session;
@@ -292,6 +326,7 @@ final class WorkerAuthGateway implements AuthGateway {
   Future<void> _clear() async {
     _refreshToken = null;
     _session = null;
+    _credentialPersistenceFailure = null;
     await _store.clear();
     _sessions.add(null);
   }
