@@ -378,6 +378,17 @@ config OMI_ENABLE_CAPTURE_LED
          updates the flag automatically, and the app may override it by
          writing the capture-state characteristic (19B10015)."
 
+config OMI_ENABLE_IDENTIFY_LED
+    bool "Identify blink characteristic"
+    default n
+    help
+        "Expose a write-only identify characteristic (19B10018) in the settings
+         service. Writing a colour index 0-5 (red, green, blue, yellow, cyan,
+         magenta — the three LED channels plus their pairwise mixes) blinks
+         that colour for a few seconds, so an owner of several identical
+         pendants can tell which physical one a row in the app refers to. The
+         blink owns the LED while it runs; status colours resume afterwards."
+
 config OMI_ENABLE_DEVICE_NAME_RW
     bool "Writable, persisted BLE device name"
     select BT_DEVICE_NAME_DYNAMIC

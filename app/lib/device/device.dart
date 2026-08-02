@@ -3,6 +3,7 @@ export 'capture_coordinator.dart';
 export 'capture_enabled_store.dart';
 export 'capture_notifications.dart';
 export 'device_audio_frame.dart';
+export 'device_identity.dart';
 export 'device_audio_forwarder.dart';
 export 'device_models.dart';
 export 'device_relay.dart';

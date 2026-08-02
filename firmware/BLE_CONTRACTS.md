@@ -163,6 +163,7 @@ is handled at the microphone instead (§7).
 | `19B10015-…` | Read, Write | 1 byte, capture state | `OMI_ENABLE_CAPTURE_LED` | yes |
 | `19B10016-…` | Read, Write | UTF-8 device name | `OMI_ENABLE_DEVICE_NAME_RW` | yes |
 | `19B10017-…` | Read, Notify | 8 bytes, user event | `OMI_ENABLE_USER_EVENTS` | yes |
+| `19B10018-…` | Write | 1 byte, identify colour 0–5 | `OMI_ENABLE_IDENTIFY_LED` | yes |
 
 ### 3.1 LED dim ratio — `19B10011-…` — Read, Write
 
@@ -288,6 +289,30 @@ Delivery semantics:
 
 Single and double tap also still appear on the legacy button service (§9.1) for
 existing app builds.
+
+### 3.8 Identify blink — `19B10018-…` — Write
+
+**New in this branch.** One byte, the identify colour index. The pendant blinks
+that colour for about six seconds and then hands the LED back to the normal
+status logic (`led_identify()` in `src/led.c`, honoured by `set_led_state()` in
+`src/main.c`).
+
+| Value | Colour | LED channels |
+| --- | --- | --- |
+| 0 | Red | R |
+| 1 | Green | G |
+| 2 | Blue | B |
+| 3 | Yellow | R+G |
+| 4 | Cyan | G+B |
+| 5 | Magenta | R+B |
+
+There are six values and not more because the LED is three PWM channels; a
+seventh colour cannot be reproduced. Out-of-range values are rejected with
+`Value Not Allowed` rather than substituted, because the app tells the owner
+which colour to look for and a substituted one would point them at the wrong
+pendant. The app derives the colour from the device id (`PendantIdentity` in
+`app/lib/device/device_identity.dart`), so a pendant always identifies the
+same way.
 
 ## 4. Features service — `19B10020-E8F2-537E-4F6C-D104768A1214`
 
@@ -658,6 +683,7 @@ DevKit button is an external switch the user wires between D4 and D5
 | `19B10015` | Capture state | yes | yes | yes | yes |
 | `19B10016` | Device name | yes | — | — | — |
 | `19B10017` | User events | yes | yes | yes | yes |
+| `19B10018` | Identify blink | yes | — | — | — |
 | `19B10021` | Features bitmap | yes | yes | yes | yes |
 | `19B10031`/`32` | Time sync | yes, NVS-backed | yes, RAM only | yes, RAM only | yes, RAM only |
 | `30295781`/`82` | Offline storage | yes, raw ring | — | yes, **FATFS, different protocol** | yes, **FATFS, different protocol** |

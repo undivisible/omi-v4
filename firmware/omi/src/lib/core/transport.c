@@ -25,6 +25,7 @@
 #include "config.h"
 #include "haptic.h"
 #include "lib/battery/battery.h"
+#include "led.h"
 #include "omi_rust.h"
 #include "mic.h"
 #include "rtc.h"
@@ -297,6 +298,36 @@ static ssize_t settings_device_name_read_handler(struct bt_conn *conn,
 }
 #endif
 
+#ifdef CONFIG_OMI_ENABLE_IDENTIFY_LED
+static struct bt_uuid_128 settings_identify_characteristic_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10018, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+
+static ssize_t settings_identify_write_handler(struct bt_conn *conn,
+                                               const struct bt_gatt_attr *attr,
+                                               const void *buf,
+                                               uint16_t len,
+                                               uint16_t offset,
+                                               uint8_t flags)
+{
+    if (len != 1) {
+        LOG_WRN("Invalid length for identify write: %u", len);
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+
+    uint8_t color = ((uint8_t *) buf)[0];
+    if (led_identify(color) != 0) {
+        // Refuse rather than blink some other colour: the app row tells the
+        // owner which colour to look for, and a substituted one would send
+        // them to the wrong pendant.
+        LOG_WRN("Unsupported identify colour: %u", color);
+        return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+    }
+
+    LOG_INF("Identify blink requested, colour %u", color);
+    return len;
+}
+#endif
+
 #ifdef CONFIG_OMI_ENABLE_USER_EVENTS
 static struct bt_uuid_128 settings_user_event_characteristic_uuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10017, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
@@ -445,6 +476,14 @@ static struct bt_gatt_attr settings_service_attr[] = {
                            BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
                            settings_device_name_read_handler,
                            settings_device_name_write_handler,
+                           NULL),
+#endif
+#ifdef CONFIG_OMI_ENABLE_IDENTIFY_LED
+    BT_GATT_CHARACTERISTIC(&settings_identify_characteristic_uuid.uuid,
+                           BT_GATT_CHRC_WRITE,
+                           BT_GATT_PERM_WRITE,
+                           NULL,
+                           settings_identify_write_handler,
                            NULL),
 #endif
 #ifdef CONFIG_OMI_ENABLE_USER_EVENTS

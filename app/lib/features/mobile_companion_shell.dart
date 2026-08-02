@@ -19,7 +19,6 @@ import 'mobile_companion_cache.dart';
 import 'mobile_digest_view.dart';
 import 'mobile_memory_screen.dart';
 import 'mobile_settings_screen.dart';
-import '../ui/markdown_text.dart';
 import '../ui/assistant_content.dart';
 import '../memory/memory_models.dart';
 import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
@@ -386,6 +385,10 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   DeviceRelaySnapshot? snapshot;
   Object? error;
   String? rememberedDeviceId;
+  // Every pendant this phone has paired, not just the active one: an owner
+  // with three identical pendants needs to see all of them to pick one, and
+  // the active id alone cannot answer "which else could I connect to".
+  List<String> rememberedDeviceIds = const [];
   bool _reconnectAttempted = false;
   bool? _desktopNoticeDismissed;
   // Capture is always on by default: connecting the pendant starts streaming
@@ -699,12 +702,16 @@ class MobilePendantPageState extends State<MobilePendantPage> {
 
   Future<void> _restorePairing() async {
     String? remembered;
+    var all = const <String>[];
     try {
       remembered = await widget.pairedDevices.read();
+      all = await widget.pairedDevices.readAll();
     } catch (_) {
       remembered = null;
     }
-    if (!mounted || remembered == null) return;
+    if (!mounted) return;
+    setState(() => rememberedDeviceIds = all);
+    if (remembered == null) return;
     setState(() => rememberedDeviceId = remembered);
     if (_reconnectAttempted || _phase != DeviceConnectionPhase.disconnected) {
       return;
@@ -759,7 +766,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       }
       await widget.services.connectDevice(remembered);
       await widget.pairedDevices.save(remembered);
-      if (mounted) setState(() => rememberedDeviceId = remembered);
+      await _refreshRemembered(remembered);
       unawaited(relay.sendHaptic(2));
     } catch (next) {
       if (mounted) setState(() => error = next);
@@ -769,13 +776,24 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     }
   }
 
-  Future<void> connect(RelayDevice device) async {
+  Future<void> connect(RelayDevice device) => connectId(device.id);
+
+  /// Connecting by id rather than by [RelayDevice] is what lets the device list
+  /// offer a remembered pendant that is not in the current scan results: the
+  /// relay can still reach it through the system-connected devices or its own
+  /// on-demand scan.
+  Future<void> connectId(String deviceId) async {
     setState(() => error = null);
     _connectInFlight = true;
     try {
-      await widget.services.connectDevice(device.id);
-      await widget.pairedDevices.save(device.id);
-      if (mounted) setState(() => rememberedDeviceId = device.id);
+      // A pendant is one BLE link at a time, so picking another one has to
+      // drop the current link first or the connect races the live stream.
+      if (_connectedDevice != null && _connectedDevice!.id != deviceId) {
+        await widget.services.disconnectDevice();
+      }
+      await widget.services.connectDevice(deviceId);
+      await widget.pairedDevices.save(deviceId);
+      await _refreshRemembered(deviceId);
       unawaited(relay.sendHaptic(2));
     } catch (next) {
       if (mounted) setState(() => error = next);
@@ -783,6 +801,32 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       _connectInFlight = false;
       _syncCaptureWithConnection();
     }
+  }
+
+  /// Blinks a pendant's identify colour. The write only reaches the pendant
+  /// over a live link, so a device the owner has not selected yet is connected
+  /// first — otherwise tapping "identify" on the other pendant would do
+  /// nothing visible and look broken.
+  Future<bool> identify(String deviceId) async {
+    if (_connectedDevice?.id != deviceId) {
+      await connectId(deviceId);
+      if (_connectedDevice?.id != deviceId) return false;
+    }
+    return relay.identifyDevice(PendantIdentity.forDeviceId(deviceId).code);
+  }
+
+  Future<void> _refreshRemembered(String? active) async {
+    List<String> all;
+    try {
+      all = await widget.pairedDevices.readAll();
+    } catch (_) {
+      all = rememberedDeviceIds;
+    }
+    if (!mounted) return;
+    setState(() {
+      rememberedDeviceId = active;
+      rememberedDeviceIds = all;
+    });
   }
 
   Future<void> disconnect() async {
@@ -799,8 +843,24 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     setState(() => error = null);
     try {
       await widget.pairedDevices.clear();
-      if (mounted) setState(() => rememberedDeviceId = null);
+      await _refreshRemembered(null);
       await widget.services.disconnectDevice();
+      if (mounted) setState(() {});
+    } catch (next) {
+      if (mounted) setState(() => error = next);
+    }
+  }
+
+  /// Forgets one pendant without touching the others, which is the only
+  /// sensible meaning of "forget" once several are remembered.
+  Future<void> forgetDevice(String deviceId) async {
+    setState(() => error = null);
+    try {
+      await widget.pairedDevices.forget(deviceId);
+      await _refreshRemembered(await widget.pairedDevices.read());
+      if (_connectedDevice?.id == deviceId) {
+        await widget.services.disconnectDevice();
+      }
       if (mounted) setState(() {});
     } catch (next) {
       if (mounted) setState(() => error = next);
@@ -1322,6 +1382,12 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           legacyFirmwareFlasher: widget.legacyFirmwareFlasher,
           openLink: widget.openLink ?? _openExternalLink,
           rememberedDeviceId: () => rememberedDeviceId,
+          rememberedDeviceIds: () => rememberedDeviceIds,
+          knownDevices: () => devices,
+          onForgetDevice: forgetDevice,
+          onSelectDevice: connectId,
+          onIdentifyDevice: identify,
+          onScan: scan,
           connectedDevice: () => _connectedDevice,
           capturing: () => widget.services.deviceAudio.active,
           transcripts: () => widget.transcripts,
@@ -3003,10 +3069,16 @@ class _SettingsSheet extends StatefulWidget {
     required this.legacyFirmwareFlasher,
     required this.openLink,
     required this.rememberedDeviceId,
+    required this.rememberedDeviceIds,
+    required this.knownDevices,
     required this.connectedDevice,
     required this.capturing,
     required this.transcripts,
     required this.onForget,
+    required this.onForgetDevice,
+    required this.onSelectDevice,
+    required this.onIdentifyDevice,
+    required this.onScan,
     required this.onDisconnect,
     required this.onOpenMemory,
   });
@@ -3019,10 +3091,16 @@ class _SettingsSheet extends StatefulWidget {
   final FirmwareFlasher? legacyFirmwareFlasher;
   final LinkOpener openLink;
   final String? Function() rememberedDeviceId;
+  final List<String> Function() rememberedDeviceIds;
+  final List<RelayDevice> Function() knownDevices;
   final RelayDevice? Function() connectedDevice;
   final bool Function() capturing;
   final List<TranscriptDelta> Function() transcripts;
   final Future<void> Function() onForget;
+  final Future<void> Function(String deviceId) onForgetDevice;
+  final Future<void> Function(String deviceId) onSelectDevice;
+  final Future<bool> Function(String deviceId) onIdentifyDevice;
+  final Future<void> Function() onScan;
   final Future<void> Function() onDisconnect;
   final VoidCallback onOpenMemory;
 
@@ -3062,6 +3140,35 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     return confirmed ?? false;
   }
 
+  /// A pendant that has never been connected has no advertised name yet, and
+  /// the raw BLE id is still better than an empty row: it is at least the thing
+  /// the identify colour is derived from.
+  String _pendantName(String deviceId) {
+    final connected = widget.connectedDevice();
+    if (connected != null && connected.id == deviceId) return connected.name;
+    for (final device in widget.knownDevices()) {
+      if (device.id == deviceId && device.name.isNotEmpty) return device.name;
+    }
+    return deviceId;
+  }
+
+  Future<void> _selectAndIdentify(String deviceId) async {
+    final blinked = await widget.onIdentifyDevice(deviceId);
+    if (!mounted) return;
+    setState(() {});
+    if (!blinked) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          key: Key('companion_identify_unsupported'),
+          content: Text(
+            'This pendant did not blink: its firmware predates the identify '
+            'light.',
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> _resetPendant() async {
     final confirmed = await _confirm(
       title: 'Reset pendant?',
@@ -3072,7 +3179,15 @@ class _SettingsSheetState extends State<_SettingsSheet> {
       confirmKey: const Key('companion_reset_pendant_confirm'),
     );
     if (!confirmed) return;
-    await widget.onForget();
+    // Forget the pendant the owner is looking at, not "the paired device":
+    // with several remembered, resetting the connected one must leave the
+    // others paired.
+    final connected = widget.connectedDevice();
+    if (connected != null) {
+      await widget.onForgetDevice(connected.id);
+    } else {
+      await widget.onForget();
+    }
     if (mounted) setState(() {});
   }
 
@@ -3190,7 +3305,17 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   @override
   Widget build(BuildContext context) {
     final remembered = widget.rememberedDeviceId();
-    final connected = widget.connectedDevice() != null;
+    final connectedDevice = widget.connectedDevice();
+    final connected = connectedDevice != null;
+    final connectedId = connectedDevice?.id;
+    // Remembered first, then anything a scan turned up, so the pendants the
+    // owner already paired keep a stable order instead of shuffling with
+    // whatever advertised most recently.
+    final pendantIds = <String>{
+      ...widget.rememberedDeviceIds(),
+      ?connectedId,
+      for (final device in widget.knownDevices()) device.id,
+    }.toList(growable: false);
     final supportsRename = widget.services.deviceRelay.supportsRename;
     final dark = _darkMode(context);
     // DraggableScrollableSheet links the list's scroll position to the sheet
@@ -3234,7 +3359,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 previewMode: widget.previewMode,
               ),
             ),
-            if (remembered != null || connected) ...[
+            if (remembered != null || connected || pendantIds.isNotEmpty) ...[
               const SizedBox(height: _sectionGap),
               const _SectionLabel('DEVICE'),
               ..._withGaps([
@@ -3269,21 +3394,42 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     trailing: const _RowChevron(),
                     onTap: () => unawaited(_sleep()),
                   ),
-                if (remembered != null)
+                for (final id in pendantIds)
                   _PaperTile(
-                    key: const Key('companion_remembered_tile'),
-                    icon: Icons.history_rounded,
-                    title: 'Remembered device',
-                    detail: remembered,
-                    trailing: const _RowChevron(
-                      icon: Icons.delete_outline_rounded,
-                    ),
-                    onTap: () => unawaited(
-                      widget.onForget().then((_) {
-                        if (mounted) setState(() {});
-                      }),
-                    ),
+                    key: Key('companion_device_$id'),
+                    // The dot is the whole point of the row: it is the only
+                    // thing that ties this entry to one of several identical
+                    // pendants on the desk, and it matches the colour the
+                    // pendant blinks when the row is tapped.
+                    icon: Icons.circle,
+                    iconColor: PendantIdentity.forDeviceId(id).color,
+                    title: _pendantName(id),
+                    detail: connectedId == id
+                        ? 'Connected · blinks '
+                              '${PendantIdentity.forDeviceId(id).label}'
+                        : 'Tap to connect · blinks '
+                              '${PendantIdentity.forDeviceId(id).label}',
+                    trailing: connectedId == id
+                        ? const Icon(
+                            Icons.check_circle_rounded,
+                            key: Key('companion_device_connected_mark'),
+                            size: 20,
+                          )
+                        : const _RowChevron(),
+                    onTap: () => unawaited(_selectAndIdentify(id)),
                   ),
+                _PaperTile(
+                  key: const Key('companion_scan_devices'),
+                  icon: Icons.bluetooth_searching_rounded,
+                  title: 'Find pendants',
+                  detail: 'Scan for Omi pendants nearby.',
+                  trailing: const _RowChevron(),
+                  onTap: () => unawaited(
+                    widget.onScan().then((_) {
+                      if (mounted) setState(() {});
+                    }),
+                  ),
+                ),
                 // Only pendants whose firmware carries a DFU service — MCUboot
                 // OTA (SMP) or Nordic Secure DFU — can be updated over BLE. Any
                 // image carrying neither never sees the row, rather than being

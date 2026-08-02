@@ -954,7 +954,8 @@ void main() {
       'companion_sign_out',
       'companion_settings_disconnect',
       'companion_sleep_device',
-      'companion_remembered_tile',
+      'companion_device_omi-1',
+      'companion_scan_devices',
       'companion_developer_options',
       'companion_reset_pendant',
       'companion_delete_account',
@@ -1257,6 +1258,94 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(adapter.renames, ['Studio Omi']);
+    fixture.services.dispose();
+  });
+
+  testWidgets('the device list shows every remembered pendant with its '
+      'identify colour', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final adapter = _MultiDeviceAdapter();
+    final fixture = await _mobileFixture('user-a', adapter: adapter);
+    final paired = VolatilePairedDeviceStore();
+    await paired.save('omi-1');
+    await paired.save('omi-2');
+    await paired.save('omi-3');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: paired,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _settle(tester);
+
+    await tester.tap(find.byKey(const Key('companion_settings_button')));
+    await tester.pumpAndSettle();
+
+    for (final id in ['omi-1', 'omi-2', 'omi-3']) {
+      final row = find.byKey(Key('companion_device_$id'));
+      expect(row, findsOneWidget, reason: '$id is missing from the list');
+      await tester.ensureVisible(row);
+      // The dot is what ties the row to the object on the desk, so it has to
+      // carry the same colour the pendant will blink.
+      final icon = tester.widget<Icon>(
+        find.descendant(of: row, matching: find.byIcon(Icons.circle)),
+      );
+      expect(icon.color, PendantIdentity.forDeviceId(id).color);
+    }
+    fixture.services.dispose();
+  });
+
+  testWidgets('tapping a pendant connects to that one and blinks its colour', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final adapter = _MultiDeviceAdapter();
+    final fixture = await _mobileFixture('user-a', adapter: adapter);
+    final paired = VolatilePairedDeviceStore();
+    await paired.save('omi-1');
+    await paired.save('omi-2');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: paired,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _settle(tester);
+
+    await tester.tap(find.byKey(const Key('companion_settings_button')));
+    await tester.pumpAndSettle();
+    final second = find.byKey(const Key('companion_device_omi-2'));
+    await tester.ensureVisible(second);
+    await tester.tap(second);
+    await _settle(tester);
+    expect(adapter.connectedId, 'omi-2');
+
+    final row = find.byKey(const Key('companion_device_omi-1'));
+    await tester.ensureVisible(row);
+    await tester.tap(row);
+    await _settle(tester);
+
+    // The other pendant has to be released first: a pendant is one BLE link,
+    // so connecting without dropping the live one would race the stream.
+    expect(adapter.disconnects, greaterThan(0));
+    expect(adapter.connectedId, 'omi-1');
+    expect(adapter.connects.last, 'omi-1');
+    expect(await paired.read(), 'omi-1');
+    expect(await paired.readAll(), ['omi-1', 'omi-2']);
+    expect(adapter.identifyWrites, [
+      PendantIdentity.forDeviceId('omi-2').code,
+      PendantIdentity.forDeviceId('omi-1').code,
+    ]);
     fixture.services.dispose();
   });
 
@@ -2543,6 +2632,64 @@ final class _Adapter implements DeviceRelayAdapter {
 
   @override
   Stream<bool> connectionState(String deviceId) => _connections.stream;
+}
+
+// Three pendants, because that is the case the device list exists for: one
+// identical object has to be picked out of several, and an adapter that
+// connects to whatever it likes regardless of the requested id would hide the
+// bug the list is meant to fix.
+final class _MultiDeviceAdapter extends _Adapter
+    implements DeviceRelayIdentify {
+  static const pendants = [
+    RelayDevice(id: 'omi-1', name: 'Omi One', audioCodec: DeviceAudioCodec.opus),
+    RelayDevice(id: 'omi-2', name: 'Omi Two', audioCodec: DeviceAudioCodec.opus),
+    RelayDevice(
+      id: 'omi-3',
+      name: 'Omi Three',
+      audioCodec: DeviceAudioCodec.opus,
+    ),
+  ];
+
+  final identifyWrites = <int>[];
+  final connects = <String>[];
+  int disconnects = 0;
+  String? connectedId;
+  bool identifyAccepts = true;
+
+  @override
+  Future<List<RelayDevice>> scan() async => pendants;
+
+  @override
+  Future<RelayDevice> connect(String deviceId) async {
+    final device = pendants.firstWhere((pendant) => pendant.id == deviceId);
+    connects.add(deviceId);
+    connectedId = deviceId;
+    _snapshots.add(
+      DeviceRelaySnapshot(
+        phase: DeviceConnectionPhase.connected,
+        capabilities: capabilities,
+        device: device,
+      ),
+    );
+    return device;
+  }
+
+  @override
+  Future<void> disconnect() async {
+    disconnects += 1;
+    connectedId = null;
+    await super.disconnect();
+  }
+
+  @override
+  bool get identifySupported => identifyAccepts;
+
+  @override
+  Future<bool> identifyDevice(int colorCode) async {
+    if (!identifyAccepts || connectedId == null) return false;
+    identifyWrites.add(colorCode);
+    return true;
+  }
 }
 
 // Stands in for a pendant on firmware that exposes the settings service, so

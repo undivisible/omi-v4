@@ -21,6 +21,17 @@ abstract interface class DeviceRelayLed {
   bool get captureLedSupported;
 }
 
+/// Makes the connected pendant blink one identify colour (settings
+/// characteristic 19b10018) so an owner with several identical pendants can
+/// tell which physical one a row refers to. Adapters return false when the
+/// firmware predates the characteristic, so the UI can say the pendant cannot
+/// blink rather than claim a light that never comes on.
+abstract interface class DeviceRelayIdentify {
+  Future<bool> identifyDevice(int colorCode);
+
+  bool get identifySupported;
+}
+
 /// Commands the pendant to sleep/power off (settings characteristic 19b10014).
 /// Adapters return false when the write is unsupported.
 abstract interface class DeviceRelaySleep {
@@ -172,6 +183,26 @@ class DeviceRelayService {
 
   bool get supportsRename =>
       role == DeviceRelayRole.mobileOwner && adapter is DeviceRelayRename;
+
+  /// Blinks the connected pendant's identify colour. Returns false when the
+  /// role or firmware cannot drive it, so the caller can tell the owner the
+  /// pendant will not light up instead of leaving them staring at it.
+  Future<bool> identifyDevice(int colorCode) async {
+    if (role != DeviceRelayRole.mobileOwner) return false;
+    final Object identify = adapter;
+    if (identify is! DeviceRelayIdentify) return false;
+    try {
+      return await identify.identifyDevice(colorCode);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool get identifySupported {
+    if (role != DeviceRelayRole.mobileOwner) return false;
+    final Object identify = adapter;
+    return identify is DeviceRelayIdentify && identify.identifySupported;
+  }
 
   /// Whether the connected pendant can take a firmware update over BLE.
   bool get dfuSupported {

@@ -1,5 +1,6 @@
 #include "lib/core/led.h"
 
+#include <errno.h>
 #include <zephyr/drivers/pwm.h>
 #include <zephyr/logging/log.h>
 
@@ -89,4 +90,72 @@ void led_off(void)
     set_led_green(false);
     k_msleep(10);
     set_led_blue(false);
+}
+
+// Identify runs on its own delayable work rather than inside the main loop:
+// that loop ticks once a second, which is far too slow to read as a deliberate
+// blink when the owner is holding three identical pendants and looking for the
+// one that answered.
+#define LED_IDENTIFY_HALF_PERIOD_MS 250
+#define LED_IDENTIFY_BLINKS 12
+
+// Six colours, because the LED has exactly three channels: the primaries plus
+// their pairwise mixes are everything the hardware can actually show, and the
+// app palette (PendantIdentity) is indexed the same way.
+static const bool led_identify_channels[][3] = {
+    {true, false, false},  // red
+    {false, true, false},  // green
+    {false, false, true},  // blue
+    {true, true, false},   // yellow
+    {false, true, true},   // cyan
+    {true, false, true},   // magenta
+};
+
+static uint8_t identify_color;
+static uint8_t identify_remaining;
+static bool identify_on;
+
+static void led_identify_work_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(led_identify_work, led_identify_work_handler);
+
+static void led_identify_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    if (identify_remaining == 0) {
+        led_off();
+        identify_on = false;
+        return;
+    }
+
+    identify_on = !identify_on;
+    if (identify_on) {
+        const bool *channels = led_identify_channels[identify_color];
+        set_led_red(channels[0]);
+        set_led_green(channels[1]);
+        set_led_blue(channels[2]);
+    } else {
+        led_off();
+        identify_remaining--;
+    }
+
+    k_work_schedule(&led_identify_work, K_MSEC(LED_IDENTIFY_HALF_PERIOD_MS));
+}
+
+bool led_identify_active(void)
+{
+    return identify_remaining > 0;
+}
+
+int led_identify(uint8_t color)
+{
+    if (color >= ARRAY_SIZE(led_identify_channels)) {
+        return -EINVAL;
+    }
+
+    identify_color = color;
+    identify_remaining = LED_IDENTIFY_BLINKS;
+    identify_on = false;
+    k_work_reschedule(&led_identify_work, K_NO_WAIT);
+    return 0;
 }

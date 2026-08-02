@@ -152,6 +152,12 @@ void set_led_state()
         return;
     }
 
+    // An identify blink owns the LED while it runs; repainting status over it
+    // would erase the very blink the owner is watching for.
+    if (led_identify_active()) {
+        return;
+    }
+
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
     // If RTC not synced, blink red to warn user to connect phone app
     if (!rtc_is_valid()) {

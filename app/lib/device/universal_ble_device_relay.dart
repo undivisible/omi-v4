@@ -14,6 +14,7 @@ final class UniversalBleDeviceRelayAdapter
         DeviceRelayAdapter,
         DeviceRelayHaptics,
         DeviceRelayLed,
+        DeviceRelayIdentify,
         DeviceRelaySleep,
         DeviceRelayRename,
         DeviceRelayDfu,
@@ -51,6 +52,11 @@ final class UniversalBleDeviceRelayAdapter
   // Device rename. Read/write UTF-8 string; firmware persists to NVS and
   // re-applies on boot. GAP Device Name (0x2a00) stays read-only.
   static const _renameCharacteristic = '19b10016-e8f2-537e-4f6c-d104768a1214';
+  // Identify blink. Write-only, 1 byte: the PendantIdentity colour code. The
+  // pendant blinks that colour for a few seconds and then hands the LED back
+  // to the normal status logic, which is what lets an owner of several
+  // identical pendants match a row on screen to the object in their hand.
+  static const _identifyCharacteristic = '19b10018-e8f2-537e-4f6c-d104768a1214';
   // SMP (mcumgr) service. Its presence is what says the running firmware was
   // built with MCUboot OTA and can take a `dfu_application.zip` over BLE.
   static const _smpService = '8d53dc1d-1db7-4cd3-868b-8a527460aa84';
@@ -77,6 +83,10 @@ final class UniversalBleDeviceRelayAdapter
   // first write answers it otherwise. Optimistic while unknown so the app does
   // not announce "no LED" on firmware that has one.
   bool? _captureLedPresent;
+  // Same optimistic-until-answered rule as the capture LED, but learned only
+  // from the first write: service discovery stops at the capture-LED
+  // characteristic, so it never gets far enough to see 19b10018.
+  bool? _identifyPresent;
   bool _smpPresent = false;
   bool _nordicDfuPresent = false;
   bool _wifiPresent = false;
@@ -207,6 +217,7 @@ final class UniversalBleDeviceRelayAdapter
     if (_connectedId != null) await disconnect();
     _restoreAttempts = 0;
     _captureLedPresent = null;
+    _identifyPresent = null;
     _smpPresent = false;
     _nordicDfuPresent = false;
     _wifiPresent = false;
@@ -581,6 +592,41 @@ final class UniversalBleDeviceRelayAdapter
   }
 
   @override
+  bool get identifySupported => _connected && (_identifyPresent ?? true);
+
+  @override
+  Future<bool> identifyDevice(int colorCode) async {
+    final deviceId = _connectedId;
+    if (deviceId == null || !_connected) return false;
+    final payload = Uint8List.fromList([colorCode & 0xff]);
+    try {
+      await UniversalBle.write(
+        deviceId,
+        _settingsService,
+        _identifyCharacteristic,
+        payload,
+      );
+      _identifyPresent = true;
+      return true;
+    } catch (_) {
+      try {
+        await UniversalBle.write(
+          deviceId,
+          _settingsService,
+          _identifyCharacteristic,
+          payload,
+          withoutResponse: true,
+        );
+        _identifyPresent = true;
+        return true;
+      } catch (_) {
+        _identifyPresent = false;
+        return false;
+      }
+    }
+  }
+
+  @override
   Future<bool> sleepDevice() async {
     final deviceId = _connectedId;
     if (deviceId == null || !_connected) return false;
@@ -666,6 +712,7 @@ final class UniversalBleDeviceRelayAdapter
     _connectedDevice = null;
     _connected = false;
     _captureLedPresent = null;
+    _identifyPresent = null;
     _smpPresent = false;
     _nordicDfuPresent = false;
     _wifiPresent = false;
