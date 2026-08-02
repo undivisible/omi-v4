@@ -462,7 +462,7 @@ final class AppServices {
   }
 
   /// The Telegram handle Omi answers on.
-  static const defaultTelegramHandle = '@omi_bot';
+  static const defaultTelegramHandle = '@omi_me_bot';
 
   static String telegramHandle() {
     const handle = String.fromEnvironment('OMI_TELEGRAM_HANDLE');
