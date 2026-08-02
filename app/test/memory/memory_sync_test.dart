@@ -213,6 +213,49 @@ void main() {
     await hub.close();
   });
 
+  test('a completed pass reports how many records it carried', () async {
+    final hub = _ExportHub([
+      _page(
+        commits: const [
+          MemoryExportCommit(
+            sequence: 1,
+            recordedAtMs: 10,
+            eventCount: 2,
+            firstEventIndex: 0,
+            recordsJson: [
+              '{"kind":"claim","record":{}}',
+              '{"kind":"evidence","record":{}}',
+            ],
+          ),
+        ],
+      ),
+    ]);
+    final transport = _RecordingTransport(
+      (_) => const {
+        'replica_id': 'replica-1',
+        'commits': [
+          {'sequence': 1, 'status': 'applied'},
+        ],
+      },
+    );
+    var reported = -1;
+    final pump = MemorySyncPump(
+      hub: hub,
+      events: hub.events,
+      transport: transport,
+      cursorStore: _CursorStore(),
+      interval: const Duration(days: 1),
+      onUploaded: (_, records) async => reported = records,
+    );
+
+    pump.start('person-1');
+    await _settle();
+
+    expect(reported, 2);
+    pump.dispose();
+    await hub.close();
+  });
+
   test('starting again for the same person does not double up', () async {
     final hub = _ExportHub([_page(), _page()]);
     final store = _CursorStore();

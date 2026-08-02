@@ -10,6 +10,69 @@ import '../native/generated/signals/signals.dart';
 import '../native/native_hub.dart';
 import '../random_id.dart';
 
+/// What personal-context ingestion has done on this machine, as far as the
+/// client can see it.
+@immutable
+final class MemoryStatus {
+  const MemoryStatus({
+    this.lastScanAt,
+    this.scannedItems = 0,
+    this.lastUploadAt,
+    this.uploadedRecords = 0,
+    this.scanFailure,
+  });
+
+  /// When the on-device scan of files, notes and mail last finished.
+  final DateTime? lastScanAt;
+
+  /// How many items that scan found across every source.
+  final int scannedItems;
+
+  /// When memory last reached the cloud, which is what the channels — iMessage,
+  /// WhatsApp — answer from.
+  final DateTime? lastUploadAt;
+
+  /// How many memory-log records that upload carried.
+  final int uploadedRecords;
+
+  /// Why the last scan came back with less than everything: a permission the
+  /// user has not granted, or a source that failed.
+  final String? scanFailure;
+
+  MemoryStatus copyWith({
+    DateTime? lastScanAt,
+    int? scannedItems,
+    DateTime? lastUploadAt,
+    int? uploadedRecords,
+    String? scanFailure,
+    bool clearScanFailure = false,
+  }) => MemoryStatus(
+    lastScanAt: lastScanAt ?? this.lastScanAt,
+    scannedItems: scannedItems ?? this.scannedItems,
+    lastUploadAt: lastUploadAt ?? this.lastUploadAt,
+    uploadedRecords: uploadedRecords ?? this.uploadedRecords,
+    scanFailure: clearScanFailure ? null : (scanFailure ?? this.scanFailure),
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      other is MemoryStatus &&
+      other.lastScanAt == lastScanAt &&
+      other.scannedItems == scannedItems &&
+      other.lastUploadAt == lastUploadAt &&
+      other.uploadedRecords == uploadedRecords &&
+      other.scanFailure == scanFailure;
+
+  @override
+  int get hashCode => Object.hash(
+    lastScanAt,
+    scannedItems,
+    lastUploadAt,
+    uploadedRecords,
+    scanFailure,
+  );
+}
+
 typedef MemorySyncCursor = ({
   int requestCommit,
   int requestEventIndex,
@@ -112,7 +175,8 @@ final class WorkerMemorySyncTransport implements MemorySyncTransport {
 typedef MemorySyncFailureHandler =
     void Function(Object error, StackTrace stackTrace);
 
-typedef MemorySyncUploadedHandler = Future<void> Function(String uid);
+typedef MemorySyncUploadedHandler =
+    Future<void> Function(String uid, int uploadedRecords);
 
 final class MemorySyncPump {
   MemorySyncPump({
@@ -159,6 +223,7 @@ final class MemorySyncPump {
     try {
       var cursor = await cursorStore.load(uid);
       final replicaId = await cursorStore.replicaId();
+      var uploadedRecords = 0;
       while (_uid == uid && generation == _generation) {
         final requestId =
             'memory-export-${DateTime.now().microsecondsSinceEpoch}';
@@ -183,6 +248,9 @@ final class MemorySyncPump {
         final page = await response;
         if (_uid != uid || generation != _generation) return;
         if (page.commits.isEmpty) break;
+        for (final commit in page.commits) {
+          uploadedRecords += commit.recordsJson.length;
+        }
         final acknowledgement = await transport.upload({
           'export_format': page.exportFormat,
           'database_schema_version': page.databaseSchemaVersion,
@@ -240,7 +308,7 @@ final class MemorySyncPump {
         if (page.complete) break;
       }
       if (_uid == uid && generation == _generation) {
-        await onUploaded?.call(uid);
+        await onUploaded?.call(uid, uploadedRecords);
       }
     } on Object catch (error, stackTrace) {
       onFailure?.call(error, stackTrace);

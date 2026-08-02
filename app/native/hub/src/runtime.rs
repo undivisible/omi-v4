@@ -2864,13 +2864,13 @@ async fn local_memory_context(
     });
     match await_blocking(task, cancellation).await {
         BlockingOutcome::Complete(pack) => {
-            // Distilled claims are the better context, but on-device memory is
-            // mostly raw evidence: the onboarding scan and every capture store
-            // `claim: None`, and claim extraction only runs when a local model
-            // is available. Returning claims only therefore handed the model an
-            // empty context on a database full of the user's own material —
-            // the "I don't have access to personal data about you" reply. Fall
-            // back to the evidence the same ranked search already produced.
+            // Distilled claims are the better context, but on-device memory can
+            // still be mostly raw evidence: captures store `claim: None`, and
+            // claim extraction only runs when a local model is available.
+            // Returning claims only therefore handed the model an empty context
+            // on a database full of the user's own material — the "I don't have
+            // access to personal data about you" reply. Fall back to the
+            // evidence the same ranked search already produced.
             let mut distilled: Vec<String> = Vec::new();
             let mut evidence: Vec<String> = Vec::new();
             for item in pack.items {
@@ -4372,27 +4372,38 @@ async fn scan_onboarding(
                     }
                     let tenant_id = memory_guard.tenant_id.clone();
                     let person_id = memory_guard.person_id.clone();
-                    let remembered = memory_guard
-                        .database
-                        .remember(RememberInput {
-                            tenant_id,
-                            feature_flag: None,
-                            person_id,
-                            ingestion_key: Some(format!(
-                                "onboarding-scan:{}:{}:{recorded_at_ms}",
-                                scan.source, item.stable_id
-                            )),
-                            kind: if scan.source == "workspace" {
-                                SourceKind::Document
-                            } else {
-                                SourceKind::Integration
-                            },
-                            text: item.text.clone(),
-                            captured_at: item.captured_at_ms.unwrap_or(recorded_at_ms),
-                            recorded_at: recorded_at_ms,
-                            claim: None,
-                        })
-                        .map_err(|error| error.to_string())?;
+                    let remembered = memory_guard.database.remember(RememberInput {
+                        tenant_id,
+                        feature_flag: None,
+                        person_id,
+                        ingestion_key: Some(format!(
+                            "onboarding-scan:{}:{}",
+                            scan.source, item.stable_id
+                        )),
+                        kind: if scan.source == "workspace" {
+                            SourceKind::Document
+                        } else {
+                            SourceKind::Integration
+                        },
+                        text: item.text.clone(),
+                        captured_at: item.captured_at_ms.unwrap_or(recorded_at_ms),
+                        recorded_at: recorded_at_ms,
+                        claim: crate::scan::scan_claim(
+                            &item.text,
+                            item.captured_at_ms.unwrap_or(recorded_at_ms),
+                        ),
+                    });
+                    // A line this pass has already stored under the same key
+                    // comes back as a payload conflict, because the scan
+                    // re-times what it re-reads: a running app is "now", a
+                    // project's recency moves. The key is what identifies the
+                    // item, so a conflict means it is already remembered, and
+                    // one such line must not abandon the other eight hundred.
+                    let remembered = match remembered {
+                        Ok(value) => value,
+                        Err(zkr::Error::Invalid(_)) => continue,
+                        Err(error) => return Err(error.to_string()),
+                    };
                     if memory_source_id.is_none() {
                         memory_source_id = Some(remembered.source_id.0);
                     }
@@ -4686,9 +4697,8 @@ async fn capture(
         );
         return false;
     };
-    let extraction_input = (crate::local_ai::is_available()
-        && matches!(source, CaptureSource::OmiDevice | CaptureSource::Chat))
-    .then(|| (Arc::clone(&memory), ingestion_key.clone(), text.clone()));
+    let extraction_input = (crate::local_ai::is_available() && extracts_claims(&source))
+        .then(|| (Arc::clone(&memory), ingestion_key.clone(), text.clone()));
     let task = spawn_capture(
         memory,
         ingestion_key,
@@ -4855,13 +4865,12 @@ fn spawn_transcript_extraction(
 }
 
 /// Persists the identity derived from the onboarding scan so the assistant can
-/// answer "what do you know about me". The scan itself stores raw evidence with
-/// `claim: None`, which neither `local_profile_context` (profiles) nor
-/// `local_memory_context` (claims) ever surfaces — leaving the memory database
-/// empty for retrieval and the model with nothing to say. The detected name and
-/// languages become profile facts; the AI summary is kept as a retrievable
-/// long-term claim. Stable ingestion keys make a re-scan update in place rather
-/// than duplicate.
+/// answer "what do you know about me". The scan's own lines become one claim
+/// each, but the identity it derives across them — who this is, what they
+/// speak, what the whole pass added up to — belongs to no single line. The
+/// detected name and languages become profile facts; the AI summary is kept as
+/// a retrievable long-term claim. Stable ingestion keys make a re-scan update
+/// in place rather than duplicate.
 fn ingest_onboarding_profile(
     memory: &mut MemoryContext,
     detected_name: Option<&str>,
@@ -5664,6 +5673,24 @@ fn capture_text(
         output.push_str(&part);
         output
     }))
+}
+
+/// Which captures are worth a claim-extraction pass.
+///
+/// Everything the user authored or received qualifies. Screen, clipboard and
+/// accessibility captures do not: they arrive at interface rates, and a model
+/// call per frame would spend the machine on window titles.
+fn extracts_claims(source: &CaptureSource) -> bool {
+    match source {
+        CaptureSource::Screen | CaptureSource::Clipboard | CaptureSource::Accessibility => false,
+        CaptureSource::OmiDevice
+        | CaptureSource::Chat
+        | CaptureSource::Workspace
+        | CaptureSource::AppleNotes
+        | CaptureSource::AppleMail
+        | CaptureSource::AppleCalendar
+        | CaptureSource::AppleReminders => true,
+    }
 }
 
 fn source_kind(source: CaptureSource) -> SourceKind {

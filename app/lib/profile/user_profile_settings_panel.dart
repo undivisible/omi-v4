@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app_services.dart';
+import '../memory/memory_sync.dart';
 import '../native/native_hub.dart';
 import '../random_id.dart';
 import '../ui/omi_orb.dart';
@@ -294,6 +295,11 @@ class _UserProfileSettingsPanelState extends State<UserProfileSettingsPanel> {
             ),
           ),
           Divider(height: 1, color: colors.hairline),
+          _MemoryStatusStrip(
+            services: widget.services,
+            colors: colors,
+            previewMode: widget.previewMode,
+          ),
           Expanded(
             child: ListView.builder(
               key: const Key('user_profile_chat_list'),
@@ -349,6 +355,76 @@ class _UserProfileSettingsPanelState extends State<UserProfileSettingsPanel> {
       ),
     );
   }
+}
+
+/// What Omi has read and what has reached the cloud.
+///
+/// Without it the only way to find out that nothing was ever ingested is to ask
+/// the assistant what it knows and read the apology.
+class _MemoryStatusStrip extends StatelessWidget {
+  const _MemoryStatusStrip({
+    required this.services,
+    required this.colors,
+    required this.previewMode,
+  });
+
+  final AppServices services;
+  final _ProfileChatColors colors;
+  final bool previewMode;
+
+  static String _ago(DateTime? when) {
+    if (when == null) return 'never';
+    final elapsed = DateTime.now().difference(when);
+    if (elapsed.inMinutes < 1) return 'just now';
+    if (elapsed.inHours < 1) return '${elapsed.inMinutes}m ago';
+    if (elapsed.inDays < 1) return '${elapsed.inHours}h ago';
+    return '${elapsed.inDays}d ago';
+  }
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<MemoryStatus>(
+    valueListenable: services.memoryStatus,
+    builder: (context, status, _) => Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${status.scannedItems} items read · scanned '
+                  '${_ago(status.lastScanAt)} · synced '
+                  '${_ago(status.lastUploadAt)}',
+                  key: const Key('memory_status_summary'),
+                  style: TextStyle(fontSize: 11.5, color: colors.muted),
+                ),
+              ),
+              TextButton(
+                key: const Key('memory_status_rescan'),
+                onPressed: previewMode
+                    ? null
+                    : () => unawaited(
+                        services.refreshPersonalContext(force: true),
+                      ),
+                child: const Text('Scan now', style: TextStyle(fontSize: 11.5)),
+              ),
+            ],
+          ),
+          if (status.scanFailure case final failure?)
+            Text(
+              failure,
+              key: const Key('memory_status_failure'),
+              style: TextStyle(
+                fontSize: 11.5,
+                height: 1.3,
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _Bubble extends StatelessWidget {

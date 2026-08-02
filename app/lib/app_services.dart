@@ -134,8 +134,15 @@ final class AppServices {
       _nativeEvents.addError,
     );
     memorySyncPump?.onFailure = _reportMemoryFailure;
-    memorySyncPump?.onUploaded = (uid) async {
+    memorySyncPump?.onUploaded = (uid, uploadedRecords) async {
       _clearMemoryFailureNotice();
+      if (!_disposed) {
+        memoryStatus.value = memoryStatus.value.copyWith(
+          lastUploadAt: _now(),
+          uploadedRecords: uploadedRecords,
+        );
+        unawaited(_persistMemoryStatus());
+      }
       await _pullMemoryMirror(uid);
     };
     _conversationController = ConversationController(
@@ -487,6 +494,7 @@ final class AppServices {
   /// Cleared the first time a settings row asks for the native stack.
   bool _deferredNativeSetup;
   MemoryMirrorPump? _memoryMirrorPump;
+  bool _memoryStatusLoaded = false;
   PreferencesMemorySyncCursorStore? _memoryCursorStore;
   final ManagedSttClient? _managedStt;
   final Uri? _workerOrigin;
@@ -570,6 +578,11 @@ final class AppServices {
   /// The most recent memory upload or mirror failure, cleared on the next
   /// successful sync cycle.
   final memorySyncNotice = ValueNotifier<String?>(null);
+
+  /// What the personal-context machinery has actually done, so emptiness is
+  /// something the user can read rather than something they discover by asking
+  /// the assistant what it knows about them.
+  final memoryStatus = ValueNotifier<MemoryStatus>(const MemoryStatus());
   Completer<String?>? _absorbCompleter;
   StreamSubscription<NativeEvent>? _absorbSubscription;
   Future<void> _liveVoiceLifecycle = Future.value();
@@ -594,6 +607,131 @@ final class AppServices {
 
   Future<String?> get selectedWorkspaceRoot =>
       capabilities.verifiedWorkspaceRoot();
+
+  /// How stale the on-device scan of files, notes and mail may get before it
+  /// runs again.
+  static const _contextScanInterval = Duration(hours: 12);
+  static const _memoryStatusKey = 'memory-status-v1';
+  static const _contextRefreshPrefix = 'context-refresh-';
+
+  /// Rescans the machine when the last pass has aged out.
+  ///
+  /// The scan used to run exactly once, from the onboarding screen, so the
+  /// assistant's picture of the user was frozen at the day they signed up: mail
+  /// that arrived afterwards, notes written afterwards and projects started
+  /// afterwards were never seen. Stable ingestion keys make repeating it cheap —
+  /// a line the previous pass already stored updates in place instead of
+  /// duplicating.
+  Future<void> refreshPersonalContext({bool force = false}) async {
+    if (_disposed || _settingsWindow || !_nativeInitialized) return;
+    final personId = _configuredPersonId;
+    if (personId == null) return;
+    // Onboarding runs the first scan itself, and a second pass racing it would
+    // scan the same machine twice for the same result.
+    try {
+      if (!await onboardingCompletion.isComplete(personId)) return;
+    } catch (_) {
+      return;
+    }
+    if (_disposed) return;
+    await _loadMemoryStatus();
+    if (!force) {
+      final last = memoryStatus.value.lastScanAt;
+      if (last != null && _now().difference(last) < _contextScanInterval) {
+        return;
+      }
+    }
+    try {
+      final root = await selectedWorkspaceRoot;
+      if (_disposed || !_nativeInitialized) return;
+      nativeHub.scanOnboarding(
+        requestId: '$_contextRefreshPrefix${randomId()}',
+        roots: [?root],
+        includeAppleNotes: defaultTargetPlatform == TargetPlatform.macOS,
+        includeAppleMail: defaultTargetPlatform == TargetPlatform.macOS,
+        recordedAtMs: _now().millisecondsSinceEpoch,
+      );
+    } catch (_) {}
+  }
+
+  void _handleContextScanEvent(NativeEvent event) {
+    if (_disposed) return;
+    if (event case NativeEventOnboardingScanCompleted(:final value)) {
+      var items = 0;
+      final blocked = <String>[];
+      for (final source in value.sources) {
+        items += source.itemsFound.toBigInt().toInt();
+        if (source.state == OnboardingScanState.denied ||
+            source.state == OnboardingScanState.failed) {
+          blocked.add(source.source);
+        }
+      }
+      memoryStatus.value = memoryStatus.value.copyWith(
+        lastScanAt: _now(),
+        scannedItems: items,
+        scanFailure: blocked.isEmpty
+            ? null
+            : 'Omi could not read ${blocked.join(', ')}. Grant access in System '
+                  'Settings › Privacy & Security › Full Disk Access, then scan '
+                  'again.',
+        clearScanFailure: blocked.isEmpty,
+      );
+      unawaited(_persistMemoryStatus());
+    } else if (event case NativeEventError(:final value)
+        when value.code == 'onboarding_scan_failed' ||
+            value.code == 'onboarding_profile_ingest_failed') {
+      memoryStatus.value = memoryStatus.value.copyWith(
+        scanFailure: value.message,
+      );
+      unawaited(_persistMemoryStatus());
+    }
+  }
+
+  Future<void> _loadMemoryStatus() async {
+    if (_memoryStatusLoaded) return;
+    _memoryStatusLoaded = true;
+    try {
+      final raw = (await SharedPreferences.getInstance()).getString(
+        _memoryStatusKey,
+      );
+      if (raw == null || _disposed) return;
+      final json = jsonDecode(raw);
+      if (json is! Map<String, Object?>) return;
+      final scan = json['last_scan_at'];
+      final upload = json['last_upload_at'];
+      final items = json['scanned_items'];
+      final records = json['uploaded_records'];
+      memoryStatus.value = MemoryStatus(
+        lastScanAt: scan is int
+            ? DateTime.fromMillisecondsSinceEpoch(scan)
+            : null,
+        scannedItems: items is int ? items : 0,
+        lastUploadAt: upload is int
+            ? DateTime.fromMillisecondsSinceEpoch(upload)
+            : null,
+        uploadedRecords: records is int ? records : 0,
+        scanFailure: json['scan_failure'] is String
+            ? json['scan_failure']! as String
+            : null,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _persistMemoryStatus() async {
+    final status = memoryStatus.value;
+    try {
+      await (await SharedPreferences.getInstance()).setString(
+        _memoryStatusKey,
+        jsonEncode({
+          'last_scan_at': status.lastScanAt?.millisecondsSinceEpoch,
+          'scanned_items': status.scannedItems,
+          'last_upload_at': status.lastUploadAt?.millisecondsSinceEpoch,
+          'uploaded_records': status.uploadedRecords,
+          'scan_failure': status.scanFailure,
+        }),
+      );
+    } catch (_) {}
+  }
 
   Future<String> scanOnboardingSources() async {
     await _queueProductionSync();
@@ -1449,6 +1587,7 @@ final class AppServices {
         authorityGeneration: _authorityGeneration,
       );
       _conversationController.scheduleInboxPoll(Duration.zero);
+      unawaited(refreshPersonalContext());
       return;
     }
     final session = productionReady ? auth.snapshot.session : null;
@@ -1475,6 +1614,7 @@ final class AppServices {
         await _configureSelectedAssistant(session.uid);
       }
       _conversationController.scheduleInboxPoll();
+      unawaited(refreshPersonalContext());
       return;
     }
     await _stopCapture();
@@ -1510,6 +1650,7 @@ final class AppServices {
     await _startMemoryMirrorPump(session.uid);
     if (_workerOrigin != null) await _configureSelectedAssistant(session.uid);
     _conversationController.scheduleInboxPoll(Duration.zero);
+    unawaited(refreshPersonalContext());
   }
 
   /// Turns the hub's live speaker recognition on for [uid], or off entirely
@@ -1850,6 +1991,7 @@ final class AppServices {
     ) when value.tool == 'chat_model') {
       chatModelNotice.value = value.detail;
     }
+    _handleContextScanEvent(event);
     if (!_conversationController.handleNativeEvent(event)) return;
     _handleMeetingEvent(event);
     _nativeEvents.add(event);

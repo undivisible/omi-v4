@@ -18,7 +18,7 @@ pub fn extraction_prompt(text: &str) -> Option<String> {
     ))
 }
 
-fn bounded_field(value: &str) -> String {
+pub fn bounded_field(value: &str) -> String {
     value
         .split_whitespace()
         .collect::<Vec<_>>()

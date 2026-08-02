@@ -215,6 +215,49 @@ const TAG_WEIGHTS: &[(&str, i32)] = &[
     ("SSH HOST", 12),
 ];
 
+/// The claim a scanned line stands for.
+///
+/// The scan stores its findings as evidence, and evidence is not what the
+/// assistant searches: every retrieval path that reaches a channel reply reads
+/// claims. Extraction cannot fill that gap here — it needs a local model, runs
+/// per capture, and the scan produces hundreds of lines in one pass — but it
+/// does not need to. Each line is already `TAG: body`, which is a subject and a
+/// relation, so the claim is a rewrite of text the user's own machine produced
+/// rather than anything inferred.
+pub fn scan_claim(text: &str, valid_from_ms: i64) -> Option<zkr::ClaimInput> {
+    let (tag, body) = parse_tag(text)?;
+    let subject = crate::extraction::bounded_field(&evidence_name(body));
+    if subject.is_empty() {
+        return None;
+    }
+    let value = crate::extraction::bounded_field(body);
+    if value.is_empty() {
+        return None;
+    }
+    Some(zkr::ClaimInput {
+        subject,
+        predicate: claim_predicate(tag).to_owned(),
+        value,
+        kind: zkr::ClaimKind::Fact,
+        valid_from: valid_from_ms,
+        tier: zkr::MemoryTier::LongTerm,
+        processing_state: zkr::MemoryProcessingState::Processed,
+    })
+}
+
+fn claim_predicate(tag: &str) -> &'static str {
+    match tag {
+        "PROJECT" => "project",
+        "SHELL" => "shell command",
+        "APP" => "uses app",
+        "DOC" => "document",
+        "NOTE TITLE" => "note",
+        "MAIL SUBJECT" => "email",
+        "BROWSING" => "visits site",
+        _ => "ssh host",
+    }
+}
+
 fn parse_tag(text: &str) -> Option<(&'static str, &str)> {
     TAG_WEIGHTS.iter().find_map(|(tag, _)| {
         text.strip_prefix(tag)
@@ -947,6 +990,44 @@ fn result(source: &str, state: ScanState, detail: impl Into<String>) -> SourceSc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tagged_scan_lines_become_long_term_facts() {
+        let claim = scan_claim("PROJECT: omi-v4 — rust, dart", 42)
+            .unwrap_or_else(|| panic!("tagged line should claim"));
+        assert_eq!(claim.subject, "omi-v4");
+        assert_eq!(claim.predicate, "project");
+        assert_eq!(claim.value, "omi-v4 — rust, dart");
+        assert_eq!(claim.kind, zkr::ClaimKind::Fact);
+        assert_eq!(claim.tier, zkr::MemoryTier::LongTerm);
+        assert_eq!(
+            claim.processing_state,
+            zkr::MemoryProcessingState::Processed
+        );
+        assert_eq!(claim.valid_from, 42);
+    }
+
+    #[test]
+    fn untagged_scan_lines_claim_nothing() {
+        assert!(scan_claim("just some text", 1).is_none());
+        assert!(scan_claim("PROJECT: ", 1).is_none());
+    }
+
+    #[test]
+    fn mail_and_note_lines_get_their_own_predicates() {
+        assert_eq!(
+            scan_claim("MAIL SUBJECT: Invoice — acme", 1)
+                .unwrap_or_else(|| panic!("mail line should claim"))
+                .predicate,
+            "email"
+        );
+        assert_eq!(
+            scan_claim("NOTE TITLE: Groceries", 1)
+                .unwrap_or_else(|| panic!("note line should claim"))
+                .predicate,
+            "note"
+        );
+    }
 
     #[test]
     fn workspace_keeps_metadata_not_contents() {
