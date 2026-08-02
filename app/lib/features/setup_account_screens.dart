@@ -593,20 +593,9 @@ class _SettingsOrb extends StatelessWidget {
             curve: Curves.elasticOut,
             builder: (context, scale, child) =>
                 Transform.scale(scale: reducedMotion ? 1 : scale, child: child),
-            child: Container(
-              width: 22,
-              height: 22,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: [Color(0xfffffcec), Color(0xffe9e4cf)],
-                ),
-              ),
-              child: const Icon(
-                Icons.blur_on_rounded,
-                color: Color(0xff171716),
-                size: 14,
-              ),
+            child: OmiActivityOrb(
+              size: 22,
+              color: _SettingsColors.of(context).ink,
             ),
           ),
         ),

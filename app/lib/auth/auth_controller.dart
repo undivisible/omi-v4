@@ -62,18 +62,25 @@ final class AuthController extends ChangeNotifier {
         consentGranted: _snapshot.consentGranted,
       ),
     );
+    final AuthSession session;
     try {
-      final session = await _gateway.signInWithChannelCode(code);
-      _authenticated(
-        session,
-        consentGranted: true,
-        processingConsent: await _receiptFor(session.uid),
-      );
+      session = await _gateway.signInWithChannelCode(code);
     } on AuthGatewayException catch (error) {
       _fail(error.failure.code, error.failure.message);
+      return;
     } catch (_) {
       _fail(AuthErrorCode.unknown, 'Could not sign in with that code');
+      return;
     }
+    // Everything past the exchange is settling in, not signing in. The code is
+    // spent the moment the Worker answers, so a failure here must not be
+    // reported as a bad code — that reading sends the user back to the bot for
+    // another one when the session they already have is fine.
+    _authenticated(
+      session,
+      consentGranted: true,
+      processingConsent: await _receiptFor(session.uid).catchError((_) => false),
+    );
   }
 
   Future<void> restoreSession() async {

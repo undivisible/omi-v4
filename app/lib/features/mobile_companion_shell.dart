@@ -20,6 +20,7 @@ import 'mobile_digest_view.dart';
 import 'mobile_memory_screen.dart';
 import 'mobile_settings_screen.dart';
 import '../ui/markdown_text.dart';
+import '../ui/assistant_content.dart';
 import '../memory/memory_models.dart';
 import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
 import '../native/native_hub.dart';
@@ -49,27 +50,15 @@ const _inkSheet = Color(0xff1c1c1a);
 // Bottom navigation geometry. The clearance is the bar's own footprint —
 // barHeight plus its symmetric vertical padding plus the gap under it — and is
 // what every scrollable on the shell reserves so its last row stays reachable.
-const _tabBarHeight = 60.0;
+const _tabBarHeight = 72.0;
 const _tabBarVerticalPadding = 8.0;
 const _tabBarHorizontalPadding = 12.0;
-const _tabBarBottomGap = 12.0;
+// No gap: the bar sits on the bottom of the display. It is inside a SafeArea,
+// so the device's own inset is what keeps it off the home indicator, and
+// anything added here only lifts it back up off the edge.
+const _tabBarBottomGap = 0.0;
 const _companionTabBarClearance =
     _tabBarHeight + _tabBarVerticalPadding * 2 + _tabBarBottomGap;
-
-// liquid_glass_widgets pads the selected-tab indicator 4 px inside its slot
-// (AnimatedGlassIndicator.padding, hardcoded by TabIndicator and not exposed),
-// so the resting pill is 52 px tall inside a 60 px bar.
-const _tabIndicatorInset = 4.0;
-const _tabIndicatorHeight = _tabBarHeight - _tabIndicatorInset * 2;
-
-// With a capsule bar the package hands the indicator its capsule sentinel, and
-// the shader clamps that to half the pill height — a 26 px stadium. At this bar
-// height the "nested arc" radius (outer 38, minus 8 padding, minus the 4 px
-// inset) lands on the same 26, so the pill's left and right ends curve away
-// from the slot boundary and the track shows through on both sides while the
-// middle looks full. Halving the arc leaves 26 px of straight vertical edge at
-// each end, so the fill meets its slot instead of tapering into it.
-const _tabIndicatorRadius = _tabIndicatorHeight / 4;
 
 /// Bottom padding a scrollable needs so its last row clears the tab bar,
 /// including the device's own bottom inset (the bar is inside a `SafeArea`).
@@ -1107,13 +1096,12 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       barHeight: _tabBarHeight,
       verticalPadding: _tabBarVerticalPadding,
       horizontalPadding: _tabBarHorizontalPadding,
-      // Without these three the indicator falls back to a translucent stadium
-      // that leaves the track visible either side of the selected tab.
-      indicatorBorderRadius: _tabIndicatorRadius,
-      indicatorExpansion: const EdgeInsets.all(_tabIndicatorInset),
-      indicatorColor: (dark ? _cream : _ink).withValues(
-        alpha: dark ? .16 : .10,
-      ),
+      // Nothing is drawn behind the selected tab. Every shape the package can
+      // put there — stadium, rounded rectangle — reads as a blob sitting on the
+      // glass rather than as part of it, so selection is carried by the icon
+      // and label alone: full-strength ink against the soft idle ink, and a
+      // heavier label weight.
+      indicatorColor: const Color(0x00000000),
       selectedIconColor: selectedFg,
       unselectedIconColor: idleFg,
       selectedLabelColor: selectedFg,
@@ -2957,7 +2945,18 @@ class _ConversationBubble extends StatelessWidget {
             style: DefaultTextStyle.of(
               context,
             ).style.copyWith(color: _pageInk(context)),
-            child: AssistantMarkdown(message.text),
+            // AssistantContent, not AssistantMarkdown. The hub renders replies
+            // through the former, which falls through to the latter for plain
+            // prose but also unpacks artifact fences into their own surfaces.
+            // Rendering the markdown directly meant an artifact arrived here as
+            // its raw fence — the same reply reading as two different things
+            // depending on which screen it landed on.
+            child: AssistantContent(
+              message.text,
+              onPrompt: (prompt) => _surfacePrepHint(context, prompt),
+              onDraftPrompt: (prompt) => _surfacePrepHint(context, prompt),
+              palette: _mobileCrepusPalette(context),
+            ),
           ),
         ),
       ),

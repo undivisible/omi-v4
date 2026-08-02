@@ -1960,7 +1960,7 @@ void main() {
     },
   );
 
-  testWidgets('the selected tab indicator is sized to fill its whole slot', (
+  testWidgets('nothing is drawn behind the selected tab', (
     tester,
   ) async {
     final fixture = await _mobileFixture('user-a');
@@ -1975,21 +1975,13 @@ void main() {
     await tester.pumpAndSettle();
 
     final bar = tester.widget<GlassTabBar>(find.byType(GlassTabBar));
-    expect(bar.barHeight, 60);
+    expect(bar.barHeight, 72);
     expect(bar.verticalPadding, 8);
     expect(bar.horizontalPadding, 12);
-    // liquid_glass_widgets insets the pill 4 px inside its slot, leaving a
-    // 52 px pill. Left at the package default the pill is a stadium — radius
-    // 26, half its own height — so both ends curve away from the slot and the
-    // track shows through. A quarter of the pill height keeps 26 px of
-    // straight vertical edge at each end.
-    expect(bar.indicatorBorderRadius, 13.0);
-    // Cancels that same 4 px inset once the drag spring is at full thickness,
-    // so the moving pill reaches its slot bounds exactly.
-    expect(bar.indicatorExpansion, const EdgeInsets.all(4));
-    // The package default is the text colour at 10% — the grey the fill was
-    // reading as. Both modes name their own wash instead.
-    expect(bar.indicatorColor, isNotNull);
+    // Fully transparent, not merely faint. Every shape the package can put
+    // behind the selected tab reads as a blob sitting on the glass rather than
+    // as part of it, so the selection is carried by the icon and label alone.
+    expect(bar.indicatorColor?.a, 0);
     fixture.services.dispose();
   });
 

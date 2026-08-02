@@ -221,7 +221,16 @@ final class WorkerAuthGateway implements AuthGateway {
     final decoded = _decode(response.body);
     final session = _sessionFrom(decoded);
     _refreshToken = _text(decoded, 'refreshToken');
-    await _store.write(_refreshToken!);
+    // The keychain is allowed to fail here. By this point the Worker has
+    // already consumed the code and minted the session — it is gone, and it is
+    // single-use, so throwing would tell the user their sign-in failed when it
+    // demonstrably succeeded and leave them holding a code that can never work
+    // again. Persistence only buys a silent restore on the next launch; losing
+    // it costs one more code later, which is a far smaller thing than losing
+    // the session in hand.
+    try {
+      await _store.write(_refreshToken!);
+    } catch (_) {}
     _session = session;
     _sessions.add(session);
     return session;

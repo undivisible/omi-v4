@@ -1010,11 +1010,10 @@ impl AssistantProvider for RsAiAssistantProvider {
             // it, which a single `stream(text)` has nowhere to put.
             let messages = vec![Message::user(text)];
             // Owned clones, not borrows: an async closure that borrowed the
-            // turn's sender could not be proven `Send` for every lifetime the
-            // spawned task might hand it.
-            let round_sender = sender.clone();
+            // turn's cancellation could not be proven `Send` for every lifetime
+            // the spawned task might hand it.
             let round_cancellation = cancellation.clone();
-            let open_round = async move |round: u32, messages: &[Message]| {
+            let open_round = async move |offer_tools: bool, messages: &[Message]| {
                 // `stream_prompt` consumes the builder, so every round builds
                 // its own. A builder is configuration, not a connection.
                 let base = match config.kind {
@@ -1031,7 +1030,7 @@ impl AssistantProvider for RsAiAssistantProvider {
                 // The last round carries no tools at all. A cap the model is
                 // merely asked to respect is not a cap; withholding the tools
                 // is what actually ends the turn.
-                let client = if catalogue.is_empty() || round == MAX_TOOL_ROUNDS {
+                let client = if catalogue.is_empty() || !offer_tools {
                     client
                 } else {
                     client
@@ -1046,19 +1045,12 @@ impl AssistantProvider for RsAiAssistantProvider {
                     ) => result,
                 };
                 match connected {
-                    Ok(Ok(stream)) => Some(stream),
-                    Ok(Err(_)) => {
-                        let _ = round_sender
-                            .send(Err("assistant provider connection failed".to_owned()))
-                            .await;
-                        None
-                    }
-                    Err(_) => {
-                        let _ = round_sender
-                            .send(Err("assistant provider connection timed out".to_owned()))
-                            .await;
-                        None
-                    }
+                    Ok(Ok(stream)) => Some(Ok(stream)),
+                    // A refused request is reported rather than sent, because a
+                    // refusal of a tools request is exactly the one the caller
+                    // can still answer by asking again without them.
+                    Ok(Err(_)) => Some(Err("assistant provider connection failed".to_owned())),
+                    Err(_) => Some(Err("assistant provider connection timed out".to_owned())),
                 }
             };
             run_tool_rounds(
@@ -1078,10 +1070,18 @@ impl AssistantProvider for RsAiAssistantProvider {
 
 /// Drives a turn across at most `MAX_TOOL_ROUNDS` tool rounds, asking
 /// `open_round` for a fresh model stream each time the conversation grew a
-/// tool result. `open_round` reports its own failures and answers `None`.
+/// tool result. `open_round` answers `None` only when the turn was cancelled,
+/// and reports a refusal as `Some(Err(_))` for this loop to decide about.
+///
+/// Tools are a way to answer better, never a way to fail. Whatever goes wrong
+/// while they are attached — a model that rejects a `tools` array, a name it
+/// was not offered, a call it never closed, a read that hangs — the turn starts
+/// over once from the user's own words with no tools at all, and only a plain
+/// completion that also fails is reported as a failure. Losing the tools costs
+/// the user a lookup; losing the reply costs them the answer.
 async fn run_tool_rounds<S, F>(
     mut open_round: F,
-    mut messages: Vec<Message>,
+    messages: Vec<Message>,
     request_id: &str,
     computer_tools_active: bool,
     tools: Option<&Arc<dyn AssistantTurnTools>>,
@@ -1089,24 +1089,55 @@ async fn run_tool_rounds<S, F>(
     cancellation: &CancellationToken,
 ) where
     S: futures::Stream<Item = Result<StreamEvent, AiError>> + Unpin,
-    F: AsyncFnMut(u32, &[Message]) -> Option<S>,
+    F: AsyncFnMut(bool, &[Message]) -> Option<Result<S, String>>,
 {
-    for round in 0..=MAX_TOOL_ROUNDS {
-        let Some(mut stream) = open_round(round, &messages).await else {
-            return;
+    let mut conversation = messages.clone();
+    let mut degraded = false;
+    let mut spoken_anything = false;
+    let mut round = 0;
+    while round <= MAX_TOOL_ROUNDS {
+        // The last round carries no tools either way: a cap the model is merely
+        // asked to respect is not a cap.
+        let offer_tools = !degraded && round < MAX_TOOL_ROUNDS;
+        let outcome = match open_round(offer_tools, &conversation).await {
+            None => return,
+            Some(Ok(mut stream)) => {
+                run_tool_round(
+                    &mut stream,
+                    request_id,
+                    computer_tools_active,
+                    tools,
+                    sender,
+                    cancellation,
+                )
+                .await
+            }
+            Some(Err(message)) => ToolRoundOutcome::Failed {
+                message,
+                spoken: false,
+            },
         };
-        match run_tool_round(
-            &mut stream,
-            request_id,
-            computer_tools_active,
-            tools,
-            sender,
-            cancellation,
-        )
-        .await
-        {
+        match outcome {
             ToolRoundOutcome::Done => return,
-            ToolRoundOutcome::Continue(appended) => messages.extend(appended),
+            ToolRoundOutcome::Continue { appended, spoken } => {
+                spoken_anything = spoken_anything || spoken;
+                conversation.extend(appended);
+                round += 1;
+            }
+            ToolRoundOutcome::Failed { message, spoken } => {
+                if spoken_anything || spoken {
+                    // Words already reached the UI, so starting over would say
+                    // them twice. What is on screen is the answer.
+                    break;
+                }
+                if degraded || !offer_tools {
+                    let _ = sender.send(Err(message)).await;
+                    return;
+                }
+                degraded = true;
+                conversation = messages.clone();
+                round = 0;
+            }
         }
     }
     // Reached only when a model keeps calling tools right through the last
@@ -1123,7 +1154,13 @@ enum ToolRoundOutcome {
     /// The turn is over and its terminal event has already been sent.
     Done,
     /// Read-only results to append to the conversation before asking again.
-    Continue(Vec<Message>),
+    Continue {
+        appended: Vec<Message>,
+        spoken: bool,
+    },
+    /// The round could not be completed. Nothing terminal has been sent, so the
+    /// caller still gets to decide between retrying and reporting.
+    Failed { message: String, spoken: bool },
 }
 
 /// A tool the turn never offered is not a tool the model may call, even when
@@ -1172,10 +1209,10 @@ where
         let next = match next {
             Ok(next) => next,
             Err(_) => {
-                let _ = sender
-                    .send(Err("assistant provider stream timed out".to_owned()))
-                    .await;
-                return ToolRoundOutcome::Done;
+                return ToolRoundOutcome::Failed {
+                    message: "assistant provider stream timed out".to_owned(),
+                    spoken: !spoken.is_empty(),
+                };
             }
         };
         let Some(next) = next else {
@@ -1205,13 +1242,11 @@ where
             }
             Ok(StreamEvent::ToolCallEnd { call_id, arguments }) => {
                 let Some(tool_name) = tool_names.remove(&call_id) else {
-                    let _ = sender
-                        .send(Err(
-                            "assistant provider returned an invalid computer-use tool call"
-                                .to_owned(),
-                        ))
-                        .await;
-                    return ToolRoundOutcome::Done;
+                    return ToolRoundOutcome::Failed {
+                        message: "assistant provider returned an invalid computer-use tool call"
+                            .to_owned(),
+                        spoken: !spoken.is_empty(),
+                    };
                 };
                 match tool_effect(&tool_name) {
                     Some(ToolEffect::Read) => {
@@ -1291,8 +1326,16 @@ where
             Ok(_) => continue,
             Err(_) => Err("assistant provider stream failed".to_owned()),
         };
-        let terminal = event.is_err();
-        if sender.send(event).await.is_err() || terminal {
+        let event = match event {
+            Ok(event) => event,
+            Err(message) => {
+                return ToolRoundOutcome::Failed {
+                    message,
+                    spoken: !spoken.is_empty(),
+                };
+            }
+        };
+        if sender.send(Ok(event)).await.is_err() {
             return ToolRoundOutcome::Done;
         }
     }
@@ -1318,6 +1361,7 @@ async fn finish_tool_round(
     // the history, so the assistant turn that made the calls is replayed ahead
     // of the results it produced.
     let mut content = Vec::new();
+    let spoken_aloud = !spoken.is_empty();
     if !spoken.trim().is_empty() {
         content.push(ContentPart::Text { text: spoken });
     }
@@ -1329,7 +1373,10 @@ async fn finish_tool_round(
         metadata: HashMap::new(),
     }];
     appended.extend(results);
-    ToolRoundOutcome::Continue(appended)
+    ToolRoundOutcome::Continue {
+        appended,
+        spoken: spoken_aloud,
+    }
 }
 
 /// Runs a read-only tool and renders its outcome as the text the model reads.
@@ -6042,7 +6089,7 @@ mod tests {
             &CancellationToken::new(),
         )
         .await;
-        let ToolRoundOutcome::Continue(appended) = outcome else {
+        let ToolRoundOutcome::Continue { appended, .. } = outcome else {
             panic!("a completed read-only call continues the turn");
         };
         assert_eq!(appended.len(), 2);
@@ -6089,7 +6136,7 @@ mod tests {
             &CancellationToken::new(),
         )
         .await;
-        assert!(matches!(outcome, ToolRoundOutcome::Continue(_)));
+        assert!(matches!(outcome, ToolRoundOutcome::Continue { .. }));
         assert!(!drain(&mut receiver).iter().any(Result::is_err));
 
         // A call the model opened and never closed is still the failure the
@@ -6110,8 +6157,11 @@ mod tests {
             &CancellationToken::new(),
         )
         .await;
-        assert!(matches!(outcome, ToolRoundOutcome::Done));
-        assert!(drain(&mut receiver).iter().any(Result::is_err));
+        // It is a failed round rather than a failed turn: the round loop still
+        // owes the user a plain answer, so the error is reported to it and not
+        // to the UI.
+        assert!(matches!(outcome, ToolRoundOutcome::Failed { .. }));
+        assert!(!drain(&mut receiver).iter().any(Result::is_err));
     }
 
     #[tokio::test]
@@ -6136,7 +6186,7 @@ mod tests {
         // permission, but neither outcome may put the action's result into the
         // conversation: it has not happened, and it will not happen until the
         // approval ledger says so.
-        assert!(matches!(outcome, ToolRoundOutcome::Done));
+        assert!(!matches!(outcome, ToolRoundOutcome::Continue { .. }));
         for event in drain(&mut receiver) {
             match event {
                 Ok(AssistantProviderEvent::Proposal(_)) | Err(_) => {}
@@ -6154,7 +6204,7 @@ mod tests {
         });
         let rounds = Arc::new(StdMutex::new(0_u32));
         let counted = Arc::clone(&rounds);
-        let open_round = async move |_round: u32, _messages: &[Message]| {
+        let open_round = async move |_offer_tools: bool, _messages: &[Message]| {
             *counted
                 .lock()
                 .unwrap_or_else(|error_value| panic!("round count locks: {error_value}")) += 1;
@@ -6164,7 +6214,7 @@ mod tests {
                 serde_json::json!({"query": "work"}),
             );
             events.push(message_end());
-            Some(scripted_stream(events))
+            Some(Ok::<_, String>(scripted_stream(events)))
         };
         run_tool_rounds(
             open_round,
@@ -6189,6 +6239,161 @@ mod tests {
                 ..
             })
         )));
+    }
+
+    fn spoken_text(events: &[Result<AssistantProviderEvent, String>]) -> String {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Ok(AssistantProviderEvent::Delta { text, .. }) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_model_that_refuses_a_tools_request_is_asked_again_without_them() {
+        let (sender, mut receiver) = mpsc::channel(64);
+        let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
+            memory: None,
+            profile: None,
+        });
+        let offers = Arc::new(StdMutex::new(Vec::new()));
+        let recorded = Arc::clone(&offers);
+        let open_round = async move |offer_tools: bool, _messages: &[Message]| {
+            recorded
+                .lock()
+                .unwrap_or_else(|error_value| panic!("offer log locks: {error_value}"))
+                .push(offer_tools);
+            if offer_tools {
+                return Some(Err("assistant provider connection failed".to_owned()));
+            }
+            Some(Ok(scripted_stream(vec![
+                StreamEvent::TextDelta {
+                    delta: "focus on the demo".to_owned(),
+                },
+                message_end(),
+            ])))
+        };
+        run_tool_rounds(
+            open_round,
+            vec![Message::user("help me decide what to focus on next")],
+            "chat-tools-6",
+            false,
+            Some(&tools),
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(
+            *offers
+                .lock()
+                .unwrap_or_else(|error_value| panic!("offer log locks: {error_value}")),
+            vec![true, false]
+        );
+        let events = drain(&mut receiver);
+        assert!(!events.iter().any(Result::is_err));
+        assert_eq!(spoken_text(&events), "focus on the demo");
+    }
+
+    #[tokio::test]
+    async fn a_tool_call_the_turn_never_offered_costs_the_tools_and_not_the_answer() {
+        let (sender, mut receiver) = mpsc::channel(64);
+        let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
+            memory: None,
+            profile: None,
+        });
+        let open_round = async move |offer_tools: bool, _messages: &[Message]| {
+            if offer_tools {
+                let mut events = tool_call("call_1", COMPUTER_OBSERVE_TOOL, serde_json::json!({}));
+                events.push(message_end());
+                return Some(Ok(scripted_stream(events)));
+            }
+            Some(Ok(scripted_stream(vec![
+                StreamEvent::TextDelta {
+                    delta: "here is what I think".to_owned(),
+                },
+                message_end(),
+            ])))
+        };
+        // The screen tools are inactive, so `computer_observe` is a name this
+        // turn never offered.
+        run_tool_rounds(
+            open_round,
+            vec![Message::user("help me decide what to focus on next")],
+            "chat-tools-7",
+            false,
+            Some(&tools),
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        let events = drain(&mut receiver);
+        assert!(!events.iter().any(Result::is_err));
+        assert_eq!(spoken_text(&events), "here is what I think");
+    }
+
+    #[tokio::test]
+    async fn a_failure_after_the_model_has_spoken_keeps_the_words_it_said() {
+        let (sender, mut receiver) = mpsc::channel(64);
+        let open_round = async move |_offer_tools: bool, _messages: &[Message]| {
+            Some(Ok::<_, String>(scripted_stream(vec![
+                StreamEvent::TextDelta {
+                    delta: "half an answer".to_owned(),
+                },
+                StreamEvent::Error {
+                    error: "upstream gave up".to_owned(),
+                },
+            ])))
+        };
+        run_tool_rounds(
+            open_round,
+            vec![Message::user("help me decide what to focus on next")],
+            "chat-tools-8",
+            false,
+            None,
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        let events = drain(&mut receiver);
+        assert!(!events.iter().any(Result::is_err));
+        assert_eq!(spoken_text(&events), "half an answer");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Ok(AssistantProviderEvent::Delta {
+                final_segment: true,
+                ..
+            })
+        )));
+    }
+
+    #[tokio::test]
+    async fn a_plain_completion_that_also_fails_is_reported() {
+        let (sender, mut receiver) = mpsc::channel(64);
+        let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
+            memory: None,
+            profile: None,
+        });
+        let open_round = async move |_offer_tools: bool, _messages: &[Message]| {
+            Some(Err::<
+                futures::stream::Iter<std::vec::IntoIter<Result<StreamEvent, AiError>>>,
+                String,
+            >(
+                "assistant provider connection failed".to_owned()
+            ))
+        };
+        run_tool_rounds(
+            open_round,
+            vec![Message::user("help me decide what to focus on next")],
+            "chat-tools-9",
+            false,
+            Some(&tools),
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        assert!(drain(&mut receiver).iter().any(Result::is_err));
     }
 
     fn lifecycle_memory(label: &str) -> (std::path::PathBuf, MemoryContext, zkr::Remembered) {
