@@ -71,7 +71,18 @@ STT_GLOBAL_SECONDS_BUDGET = "115200"
 STT_UID_COST_BUDGET_MICROUSD = "300000"
 STT_GLOBAL_COST_BUDGET_MICROUSD = "9600000"
 
-# Minutely cron — deliverDueChannelMessages, respondToStaleInboxItems,
+# Channel responder. The Worker is the assistant a Telegram or iMessage user is
+# talking to — memory is synced to D1/Vectorize and the model runs here — so it
+# claims an inbound inbox item the moment the webhook lands, under waitUntil.
+# Raise this (milliseconds) only to hand a desktop a grace window to answer
+# first; 0 means no wait. `CHANNEL_FALLBACK_RESPONDER = "false"` remains the
+# kill switch that stops the Worker answering at all.
+CHANNEL_RESPONDER_CLAIM_DELAY_MS = "0"
+
+# Minutely cron — the retry net, not the fast path: inbound channel messages are
+# answered and delivered inline from the webhook (see `answer_and_deliver_now`),
+# and this sweep re-drains whatever that missed or has to back off from.
+# deliverDueChannelMessages, respondToStaleInboxItems,
 # reconcileManagedAssistantRequests, generateDueCurrents, and
 # backfillClaimVectors→drainPendingEmbeddings via `#[event(scheduled)]`.
 [triggers]

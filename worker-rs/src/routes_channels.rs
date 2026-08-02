@@ -24,8 +24,9 @@ use crate::channel_signup::{
     FIRST_CONTACT_TEXT, SIGNUP_GUIDE_TEXT,
 };
 use crate::delivery::{
-    self, coordinator_name, http_outcome, network_error_message, network_outcome, retry_delay,
-    stable_idempotency_key, Channel, RetryAfterHints, MAX_ATTEMPTS,
+    self, coordinator_name, due_deliveries_for_conversation_sql, due_deliveries_sql, http_outcome,
+    network_error_message, network_outcome, retry_delay, stable_idempotency_key, Channel,
+    RetryAfterHints, MAX_ATTEMPTS,
 };
 use crate::glue::error_json;
 use crate::inbox_fallback as fallback;
@@ -81,8 +82,6 @@ fn row_to_delivery(row: &Value) -> Option<DeliveryRow> {
     })
 }
 
-const CLAIM_SQL: &str = "UPDATE channel_deliveries\n       SET state = 'delivering', attempts = attempts + 1, lease_until = ?2, lease_token = ?5, updated_at = ?1\n       WHERE id = ?3 AND uid = ?6 AND channel = ?7 AND attempts < ?4\n         AND EXISTS (\n           SELECT 1 FROM channel_bindings b\n           WHERE b.uid = channel_deliveries.uid AND b.channel = channel_deliveries.channel\n             AND b.revoked_at IS NULL\n             AND COALESCE(b.channel_chat_id, b.channel_user_id) = channel_deliveries.channel_chat_id\n         )\n         AND NOT EXISTS (\n           SELECT 1 FROM channel_deliveries older\n           WHERE older.channel = channel_deliveries.channel\n             AND older.uid = channel_deliveries.uid\n             AND older.channel_chat_id = channel_deliveries.channel_chat_id\n             AND older.rowid < channel_deliveries.rowid\n             AND older.state IN ('pending', 'retry', 'delivering')\n         )\n         AND (\n           (state IN ('pending', 'retry') AND next_attempt_at <= ?1) OR\n           (state = 'delivering' AND lease_until < ?1)\n         )\n       RETURNING id, uid, channel, channel_chat_id, text, attempts, idempotency_key, lease_token";
-
 async fn claim(
     db: &worker::D1Database,
     id: &str,
@@ -92,7 +91,7 @@ async fn claim(
 ) -> Result<Option<DeliveryRow>> {
     let lease_token = random_uuid();
     let row = db
-        .prepare(CLAIM_SQL)
+        .prepare(delivery::CLAIM_SQL)
         .bind(&[
             (now as f64).into(),
             ((now + delivery::LEASE_MS) as f64).into(),
@@ -1832,9 +1831,7 @@ pub async fn deliver_due_channel_messages(env: &Env) -> Result<()> {
         }
     }
     let rows = db
-        .prepare(
-            "SELECT d.id, d.uid, d.channel FROM channel_deliveries d\n     WHERE d.attempts < ?1 AND (\n       (d.state IN ('pending', 'retry') AND d.next_attempt_at <= ?2) OR\n       (d.state = 'delivering' AND d.lease_until < ?2)\n     ) AND NOT EXISTS (\n       SELECT 1 FROM channel_deliveries older\n       WHERE older.uid = d.uid AND older.channel = d.channel AND older.channel_chat_id = d.channel_chat_id\n         AND older.rowid < d.rowid\n         AND older.state IN ('pending', 'retry', 'delivering')\n     ) ORDER BY d.next_attempt_at LIMIT 25",
-        )
+        .prepare(due_deliveries_sql())
         .bind(&[(MAX_ATTEMPTS as f64).into(), (now as f64).into()])?
         .all()
         .await?;
@@ -1855,6 +1852,55 @@ pub async fn deliver_due_channel_messages(env: &Env) -> Result<()> {
             )
             .await;
         }
+    }
+    Ok(())
+}
+
+/// The same dispatch pass as [`deliver_due_channel_messages`], narrowed to one
+/// (uid, channel) and meant to be run from a request rather than from the cron.
+///
+/// The cron is the reason replies used to feel slow: `crons = ["* * * * *"]` is
+/// Cloudflare's floor, so a reply that became due a moment after a tick sat
+/// there for the rest of the minute with nothing wrong with it. Kicking this
+/// from the inbound webhook — under `waitUntil`, so the provider still gets its
+/// 200 immediately — collapses that wait to nothing in the common case.
+///
+/// It does not replace the cron. It cannot: a delivery that fails here goes
+/// back to `retry` with a `next_attempt_at` minutes out, and nobody is holding
+/// a request open that long. The sweep stays the safety net for exactly those,
+/// and for anything queued while no webhook happened to arrive.
+pub async fn deliver_due_channel_messages_for(
+    env: &Env,
+    uid: &str,
+    channel: Channel,
+) -> Result<()> {
+    let now = now_ms();
+    let db = env.d1("DB")?;
+    let rows = db
+        .prepare(due_deliveries_for_conversation_sql())
+        .bind(&[
+            (MAX_ATTEMPTS as f64).into(),
+            (now as f64).into(),
+            uid.into(),
+            channel.as_str().into(),
+        ])?
+        .all()
+        .await?;
+    for row in rows.results::<Value>()? {
+        let Some(id) = json_str(&row, "id") else {
+            continue;
+        };
+        // Through the coordinator, never straight into `deliver_channel_message`:
+        // the DO is what serializes this drain against the cron's, so the two
+        // never sit in `CLAIM_SQL` at the same instant for the same user.
+        let _ = dispatch_to_coordinator(
+            env,
+            uid,
+            channel,
+            "/deliver",
+            &json!({ "id": id, "uid": uid, "channel": channel.as_str(), "now": now }),
+        )
+        .await;
     }
     Ok(())
 }
@@ -1986,7 +2032,7 @@ async fn respond_to_item(env: &Env, id: &str, uid: &str, now: i64) -> Result<()>
             ((now + fallback::FALLBACK_LEASE_MS) as f64).into(),
             lease_token.clone().into(),
             (fallback::MAX_ATTEMPTS as f64).into(),
-            ((now - fallback::FALLBACK_CLAIM_DELAY_MS) as f64).into(),
+            ((now - claim_delay_ms(env)) as f64).into(),
         ])?
         .first::<Value>(None)
         .await?;
@@ -2016,11 +2062,13 @@ async fn respond_to_item(env: &Env, id: &str, uid: &str, now: i64) -> Result<()>
                     .await?;
                     return Ok(());
                 }
-                fallback::OFFLINE_ACKNOWLEDGEMENT.to_string()
+                fallback::MODEL_UNAVAILABLE_TEXT.to_string()
             }
         }
     } else {
-        fallback::OFFLINE_ACKNOWLEDGEMENT.to_string()
+        // No plan, so no assistant to run — and no desktop that was ever going
+        // to answer on its behalf. Say what is actually in the way.
+        fallback::NO_PLAN_TEXT.to_string()
     };
     reply = fallback::finalize_reply(&channel, &reply);
     let result = complete_inbox_item_done(env, uid, id, &lease_token, &reply, now_ms()).await;
@@ -2030,25 +2078,77 @@ async fn respond_to_item(env: &Env, id: &str, uid: &str, now: i64) -> Result<()>
     Ok(())
 }
 
-/// `respondToStaleInboxItems`.
-pub async fn respond_to_stale_inbox_items(env: &Env) -> Result<()> {
-    if fallback::responder_disabled(
+/// How long an inbox item must sit before this Worker will claim it, read from
+/// `CHANNEL_RESPONDER_CLAIM_DELAY_MS` (see `inbox_fallback::claim_delay_ms`).
+/// Zero unless someone deliberately asks for a grace window.
+fn claim_delay_ms(env: &Env) -> i64 {
+    fallback::claim_delay_ms(
+        crate::worker_util::secret_or_var(env, "CHANNEL_RESPONDER_CLAIM_DELAY_MS").as_deref(),
+    )
+}
+
+/// `CHANNEL_FALLBACK_RESPONDER = "false"` still switches the responder off —
+/// the kill switch outlives the name, and it is the only way to stop the Worker
+/// answering without a redeploy.
+fn responder_disabled(env: &Env) -> bool {
+    fallback::responder_disabled(
         env.var("CHANNEL_FALLBACK_RESPONDER")
             .ok()
             .map(|v| v.to_string())
             .as_deref(),
-    ) {
+    )
+}
+
+/// Answer this user's freshly-arrived messages and put the replies on the wire,
+/// now, from inside the request that delivered them.
+///
+/// This is the whole point of the change: the assistant runs here, in the
+/// cloud, against memory that is already synced here, so there is nothing to
+/// wait for. The webhook has already returned its 200 by the time this runs —
+/// the caller hands it to `waitUntil` — so a slow model costs the provider
+/// nothing and cannot earn us a webhook retry.
+///
+/// Answering and delivering are one call because they are one user-visible
+/// event: a reply that exists in `channel_deliveries` but has not been sent is,
+/// to the person holding the phone, indistinguishable from no reply at all.
+pub async fn answer_and_deliver_now(env: &Env, uid: &str, channel: Channel) -> Result<()> {
+    if !responder_disabled(env) {
+        let now = now_ms();
+        let db = env.d1("DB")?;
+        let items = db
+            .prepare(fallback::claimable_items_for_uid_sql())
+            .bind(&[
+                (fallback::MAX_ATTEMPTS as f64).into(),
+                ((now - claim_delay_ms(env)) as f64).into(),
+                (fallback::MAX_ITEMS_PER_RUN as f64).into(),
+                uid.into(),
+            ])?
+            .all()
+            .await?;
+        for row in items.results::<Value>()? {
+            if let Some(id) = json_str(&row, "id") {
+                // `respond_to_item` claims through the same fenced UPDATE the
+                // cron uses, so if the sweep — or a desktop — took this item
+                // first, this call finds nothing and returns without a word.
+                let _ = respond_to_item(env, &id, uid, now).await;
+            }
+        }
+    }
+    deliver_due_channel_messages_for(env, uid, channel).await
+}
+
+/// `respondToStaleInboxItems`.
+pub async fn respond_to_stale_inbox_items(env: &Env) -> Result<()> {
+    if responder_disabled(env) {
         return Ok(());
     }
     let now = now_ms();
     let db = env.d1("DB")?;
     let stale = db
-        .prepare(
-            "SELECT id, uid FROM channel_inbox\n     WHERE status = 'pending' AND attempts < ?1 AND received_at <= ?2\n     ORDER BY received_at, id LIMIT ?3",
-        )
+        .prepare(fallback::claimable_items_sql())
         .bind(&[
             (fallback::MAX_ATTEMPTS as f64).into(),
-            ((now - fallback::FALLBACK_CLAIM_DELAY_MS) as f64).into(),
+            ((now - claim_delay_ms(env)) as f64).into(),
             (fallback::MAX_ITEMS_PER_RUN as f64).into(),
         ])?
         .all()

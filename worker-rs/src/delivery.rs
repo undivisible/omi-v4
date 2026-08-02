@@ -13,6 +13,53 @@ pub const MAX_ATTEMPTS: u32 = 5;
 /// `leaseMs` in delivery.ts.
 pub const LEASE_MS: i64 = 30_000;
 
+/// The one statement that turns a queued delivery into an in-flight one.
+///
+/// It lives here, next to the pure logic, because it is the *only* thing
+/// standing between one reply and two: two callers racing for the same row —
+/// the minutely cron and the inline drain the inbound webhook kicks off — both
+/// run this UPDATE, and SQLite settles it. The loser's `first()` comes back
+/// empty, so it never reaches the provider `fetch` at all. Every later write in
+/// `deliver_channel_message` is fenced on the `lease_token` this statement
+/// minted, so a stale winner that wakes up after its lease expired cannot
+/// overwrite the state of whoever took the row from it.
+///
+/// The `state IN ('pending', 'retry') AND next_attempt_at <= now` /
+/// `state = 'delivering' AND lease_until < now` disjunction at the bottom is
+/// what makes that true: a row that is already `delivering` under a live lease
+/// matches nothing, and a row that reached `sent` matches nothing ever again.
+pub const CLAIM_SQL: &str = "UPDATE channel_deliveries\n       SET state = 'delivering', attempts = attempts + 1, lease_until = ?2, lease_token = ?5, updated_at = ?1\n       WHERE id = ?3 AND uid = ?6 AND channel = ?7 AND attempts < ?4\n         AND EXISTS (\n           SELECT 1 FROM channel_bindings b\n           WHERE b.uid = channel_deliveries.uid AND b.channel = channel_deliveries.channel\n             AND b.revoked_at IS NULL\n             AND COALESCE(b.channel_chat_id, b.channel_user_id) = channel_deliveries.channel_chat_id\n         )\n         AND NOT EXISTS (\n           SELECT 1 FROM channel_deliveries older\n           WHERE older.channel = channel_deliveries.channel\n             AND older.uid = channel_deliveries.uid\n             AND older.channel_chat_id = channel_deliveries.channel_chat_id\n             AND older.rowid < channel_deliveries.rowid\n             AND older.state IN ('pending', 'retry', 'delivering')\n         )\n         AND (\n           (state IN ('pending', 'retry') AND next_attempt_at <= ?1) OR\n           (state = 'delivering' AND lease_until < ?1)\n         )\n       RETURNING id, uid, channel, channel_chat_id, text, attempts, idempotency_key, lease_token";
+
+/// The `WHERE` fragment that selects deliveries worth dispatching right now,
+/// over an aliased `channel_deliveries d`. `?1` is `maxAttempts`, `?2` is
+/// `now`.
+///
+/// Shared verbatim by the scheduled sweep and by the per-user inline drain so
+/// the two cannot drift into disagreeing about what "due" means — if they did,
+/// the inline path could dispatch a row the cron considers still in flight (or
+/// the reverse), and the only thing left holding the line would be
+/// [`CLAIM_SQL`]. It holds, but a second agreeing filter in front of it is
+/// cheaper than a DO round trip that always loses the race.
+pub const DUE_DELIVERY_PREDICATE_SQL: &str = "d.attempts < ?1 AND (\n       (d.state IN ('pending', 'retry') AND d.next_attempt_at <= ?2) OR\n       (d.state = 'delivering' AND d.lease_until < ?2)\n     ) AND NOT EXISTS (\n       SELECT 1 FROM channel_deliveries older\n       WHERE older.uid = d.uid AND older.channel = d.channel AND older.channel_chat_id = d.channel_chat_id\n         AND older.rowid < d.rowid\n         AND older.state IN ('pending', 'retry', 'delivering')\n     )";
+
+/// How many due deliveries one dispatch pass will route, scheduled or inline.
+pub const DUE_DELIVERY_LIMIT: u32 = 25;
+
+/// The scheduled sweep's query: every due delivery across every user.
+pub fn due_deliveries_sql() -> String {
+    format!(
+        "SELECT d.id, d.uid, d.channel FROM channel_deliveries d\n     WHERE {DUE_DELIVERY_PREDICATE_SQL} ORDER BY d.next_attempt_at LIMIT {DUE_DELIVERY_LIMIT}"
+    )
+}
+
+/// The inline drain's query: the same rows, narrowed to the one conversation
+/// whose webhook just arrived (`?3` uid, `?4` channel).
+pub fn due_deliveries_for_conversation_sql() -> String {
+    format!(
+        "SELECT d.id FROM channel_deliveries d\n     WHERE d.uid = ?3 AND d.channel = ?4 AND {DUE_DELIVERY_PREDICATE_SQL} ORDER BY d.next_attempt_at LIMIT {DUE_DELIVERY_LIMIT}"
+    )
+}
+
 /// Provider channel. Mirrors the TS `Channel` union.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
@@ -171,6 +218,48 @@ mod tests {
             coordinator_name("u1", Channel::IMessage),
             "u1\u{0000}imessage"
         );
+    }
+
+    #[test]
+    fn both_dispatch_passes_agree_on_what_is_due() {
+        // The whole no-double-send argument rests on the inline drain and the
+        // cron selecting from the same definition of "due", so assert they are
+        // literally the same characters rather than two copies that agree today.
+        let scheduled = due_deliveries_sql();
+        let inline = due_deliveries_for_conversation_sql();
+        assert!(scheduled.contains(DUE_DELIVERY_PREDICATE_SQL));
+        assert!(inline.contains(DUE_DELIVERY_PREDICATE_SQL));
+        // The inline pass differs only by the uid/channel narrowing and by not
+        // needing to read back columns it already knows.
+        assert!(inline.contains("d.uid = ?3 AND d.channel = ?4"));
+        assert!(!scheduled.contains("d.uid = ?3"));
+        assert!(scheduled.contains("SELECT d.id, d.uid, d.channel"));
+        for sql in [&scheduled, &inline] {
+            assert!(sql.contains("ORDER BY d.next_attempt_at"));
+            assert!(sql.ends_with(&format!("LIMIT {DUE_DELIVERY_LIMIT}")));
+        }
+    }
+
+    #[test]
+    fn a_sent_or_leased_delivery_can_never_be_claimed_again() {
+        // A row only leaves 'pending'/'retry' when its next attempt is due, or
+        // leaves 'delivering' when its lease has lapsed. 'sent' and 'cancelled'
+        // appear in neither arm, which is why a reply the inline path already
+        // put on the wire is invisible to the next cron tick.
+        assert!(CLAIM_SQL
+            .contains("(state IN ('pending', 'retry') AND next_attempt_at <= ?1) OR\n           (state = 'delivering' AND lease_until < ?1)"));
+        assert!(!CLAIM_SQL.contains("'sent'"));
+        // The claim mints a lease token, and the row moves to 'delivering' in
+        // the same statement — there is no window where two callers both see a
+        // claimable row.
+        assert!(CLAIM_SQL.starts_with("UPDATE channel_deliveries"));
+        assert!(CLAIM_SQL.contains("SET state = 'delivering', attempts = attempts + 1"));
+        assert!(CLAIM_SQL.contains("lease_token = ?5"));
+        assert!(CLAIM_SQL.contains("RETURNING"));
+        // Attempts are bounded by the same `maxAttempts` the due predicate uses,
+        // so neither pass can spin on a row forever.
+        assert!(CLAIM_SQL.contains("attempts < ?4"));
+        assert!(DUE_DELIVERY_PREDICATE_SQL.contains("d.attempts < ?1"));
     }
 
     #[test]

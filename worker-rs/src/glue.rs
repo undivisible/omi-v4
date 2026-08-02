@@ -140,6 +140,26 @@ async fn capture_exception(env: Env, error: String) {
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
     let report_env = env.clone();
+    // The two inbound channel webhooks are dispatched before the router,
+    // because they are the only handlers that need the execution `Context`:
+    // they answer the user's message after replying to the provider, under
+    // `waitUntil`. workers-rs `Router` handlers are only ever handed a
+    // `RouteContext`, which does not carry `waitUntil`, and threading a new
+    // data type through every `register` hook in the crate to reach two routes
+    // is a worse trade than matching two paths by hand. The error reporting
+    // below still applies, because both arms produce the same `response`.
+    if let Some(route) = inbound_channel_webhook(&req) {
+        let response = match route {
+            InboundChannelWebhook::Telegram => handle_webhook_telegram(req, &env, &ctx).await,
+            InboundChannelWebhook::Sendblue(token) => {
+                handle_webhook_sendblue(req, &env, &ctx, &token).await
+            }
+        };
+        if let Err(error) = &response {
+            ctx.wait_until(capture_exception(report_env, error.to_string()));
+        }
+        return response;
+    }
     let router = Router::new()
         .get("/health", |_req, _ctx| {
             Response::from_json(&json!({ "service": "omi-v4-api", "status": "ok" }))
@@ -165,8 +185,8 @@ async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
         .delete_async("/v1/account", handle_account_delete)
         // Phase 2: unauthenticated inbound webhooks (own auth: secret header /
         // HMAC). Mounted before the `/v1/*` auth guard in the TS worker.
-        .post_async("/v1/webhooks/telegram", handle_webhook_telegram)
-        .post_async("/v1/webhooks/sendblue/:token", handle_webhook_sendblue)
+        // The Telegram and Sendblue webhooks are *not* here — see
+        // `inbound_channel_webhook` for why they are dispatched by hand.
         .post_async("/v1/webhooks/stripe", handle_webhook_stripe)
         // Phase 2: desktop auth handoff (no `/v1/*` middleware; /complete does
         // its own Firebase verification internally).
@@ -1374,6 +1394,17 @@ async fn bind_channel(
     })
 }
 
+/// The outcome of enqueueing an inbound channel message.
+///
+/// `uid` is present whenever the sender is linked to an account — that is the
+/// question "is there someone here to answer?", and it stays `Some` even when
+/// `queued` is false, because a conversation-message conflict means the item is
+/// already on the inbox and still wants an answer.
+struct EnqueuedMessage {
+    uid: Option<String>,
+    queued: bool,
+}
+
 /// Port of `enqueue`: look up the binding, then append the inbound message with
 /// the channel_inbox + audit statements. Returns true when appended.
 #[allow(clippy::too_many_arguments)]
@@ -1386,7 +1417,7 @@ async fn enqueue_channel_message(
     channel_chat_id: &str,
     text: &str,
     payload: &Value,
-) -> Result<bool> {
+) -> Result<EnqueuedMessage> {
     let binding = db
         .prepare(
             "SELECT uid FROM channel_bindings\n             WHERE channel = ?1 AND channel_user_id = ?2 AND revoked_at IS NULL",
@@ -1395,9 +1426,13 @@ async fn enqueue_channel_message(
         .first::<Value>(None)
         .await?;
     let Some(binding) = binding else {
-        return Ok(false);
+        return Ok(EnqueuedMessage {
+            uid: None,
+            queued: false,
+        });
     };
     let uid = row_str(&binding, "uid").unwrap_or_default();
+    let uid_for_answer = uid.clone();
     let now = now_ms();
     let event_hash = crypto_util::sha256_hex(&format!("{channel}\u{0}{event_id}"));
     let payload_json = payload.to_string();
@@ -1439,13 +1474,42 @@ async fn enqueue_channel_message(
         delivery_id: None,
         created_at: now,
     };
-    Ok(append_conversation_message(db, &message, extra)
+    let queued = append_conversation_message(db, &message, extra)
         .await?
-        .is_some())
+        .is_some();
+    Ok(EnqueuedMessage {
+        uid: Some(uid_for_answer),
+        queued,
+    })
 }
 
-async fn handle_webhook_telegram(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let secret = secret_or_var(&ctx.env, "TELEGRAM_WEBHOOK_SECRET").unwrap_or_default();
+/// The inbound provider webhooks, matched by hand so they can reach the
+/// execution `Context`. `Sendblue` carries the path token the router used to
+/// bind as `:token`.
+enum InboundChannelWebhook {
+    Telegram,
+    Sendblue(String),
+}
+
+fn inbound_channel_webhook(req: &Request) -> Option<InboundChannelWebhook> {
+    if req.method() != worker::Method::Post {
+        return None;
+    }
+    let path = req.path();
+    if path == "/v1/webhooks/telegram" {
+        return Some(InboundChannelWebhook::Telegram);
+    }
+    let token = path.strip_prefix("/v1/webhooks/sendblue/")?;
+    // The router's `:token` matches one segment; anything deeper was never a
+    // route here and must stay a 404 rather than a token containing a slash.
+    if token.is_empty() || token.contains('/') {
+        return None;
+    }
+    Some(InboundChannelWebhook::Sendblue(token.to_string()))
+}
+
+async fn handle_webhook_telegram(mut req: Request, env: &Env, exec: &Context) -> Result<Response> {
+    let secret = secret_or_var(env, "TELEGRAM_WEBHOOK_SECRET").unwrap_or_default();
     let supplied = header(&req, "x-telegram-bot-api-secret-token");
     if secret.is_empty()
         || supplied.is_empty()
@@ -1458,7 +1522,7 @@ async fn handle_webhook_telegram(mut req: Request, ctx: RouteContext<()>) -> Res
     let Ok((event_id, parsed)) = wh::parse_telegram(&body) else {
         return error_json("Invalid update", 400);
     };
-    let db = ctx.env.d1("DB")?;
+    let db = env.d1("DB")?;
     let fresh = record_webhook(&db, "telegram", &event_id).await?;
     let Some(message) = parsed else {
         return Response::from_json(&json!({ "accepted": true, "queued": false }));
@@ -1471,7 +1535,7 @@ async fn handle_webhook_telegram(mut req: Request, ctx: RouteContext<()>) -> Res
             bind_channel(&db, "telegram", &message.user_id, &message.chat_id, &token).await?;
         if outcome == LinkOutcome::Group {
             let _ = crate::routes_channels::send_channel_text(
-                &ctx.env,
+                env,
                 Channel::Telegram,
                 &message.chat_id,
                 crate::channel_group::GROUP_CHANNEL_LINK_ERROR,
@@ -1482,7 +1546,8 @@ async fn handle_webhook_telegram(mut req: Request, ctx: RouteContext<()>) -> Res
         return Response::from_json(&json!({ "accepted": true, "linked": linked }));
     }
     let processed = process_channel_message(
-        &ctx.env,
+        env,
+        exec,
         Channel::Telegram,
         fresh,
         &event_id,
@@ -1503,16 +1568,20 @@ async fn handle_webhook_telegram(mut req: Request, ctx: RouteContext<()>) -> Res
     }))
 }
 
-async fn handle_webhook_sendblue(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let path_token = ctx.param("token").cloned().unwrap_or_default();
+async fn handle_webhook_sendblue(
+    mut req: Request,
+    env: &Env,
+    exec: &Context,
+    path_token: &str,
+) -> Result<Response> {
     let signing = header(&req, "sb-signing-secret");
-    let env_value = |key: &str| secret_or_var(&ctx.env, key);
+    let env_value = |key: &str| secret_or_var(env, key);
     let supplied = if signing.is_empty() {
         None
     } else {
         Some(signing.as_str())
     };
-    if !crate::sendblue::verify_sendblue_webhook(env_value, &path_token, supplied) {
+    if !crate::sendblue::verify_sendblue_webhook(env_value, path_token, supplied) {
         return error_json("Unauthorized", 401);
     }
     let Ok(body) = req.json::<Value>().await else {
@@ -1522,7 +1591,7 @@ async fn handle_webhook_sendblue(mut req: Request, ctx: RouteContext<()>) -> Res
         return Response::from_json(&json!({ "accepted": true, "queued": false }));
     };
     let event_id = format!("message.received:{}", inbound.message_handle);
-    let db = ctx.env.d1("DB")?;
+    let db = env.d1("DB")?;
     let fresh = record_webhook(&db, crate::sendblue::IMESSAGE_CHANNEL, &event_id).await?;
     if let Some(token) = wh::link_token(&inbound.text, false) {
         if !fresh {
@@ -1538,7 +1607,7 @@ async fn handle_webhook_sendblue(mut req: Request, ctx: RouteContext<()>) -> Res
         .await?;
         if outcome == LinkOutcome::Group {
             let _ = crate::routes_channels::send_channel_text(
-                &ctx.env,
+                env,
                 Channel::IMessage,
                 &inbound.chat_id,
                 crate::channel_group::GROUP_CHANNEL_LINK_ERROR,
@@ -1549,7 +1618,8 @@ async fn handle_webhook_sendblue(mut req: Request, ctx: RouteContext<()>) -> Res
         return Response::from_json(&json!({ "accepted": true, "linked": linked }));
     }
     let processed = process_channel_message(
-        &ctx.env,
+        env,
+        exec,
         Channel::IMessage,
         fresh,
         &event_id,
@@ -1580,6 +1650,7 @@ struct ProcessedMessage {
 #[allow(clippy::too_many_arguments)]
 async fn process_channel_message(
     env: &Env,
+    exec: &Context,
     channel: Channel,
     fresh: bool,
     event_id: &str,
@@ -1622,8 +1693,24 @@ async fn process_channel_message(
         payload,
     )
     .await?;
+    // Answer it now. The assistant runs here and the memory it answers from is
+    // already here, so the only thing a queue was ever buying was a wait: the
+    // cron is capped at one tick a minute, and the responder used to sit on an
+    // item for two more before touching it. Under `waitUntil` the provider has
+    // its 200 the moment this function returns, and generation continues after.
+    //
+    // A duplicate webhook delivery (`fresh == false`) is deliberately included:
+    // the enqueue is `INSERT OR IGNORE`, so the retry adds no second item, and
+    // if the first delivery's isolate died mid-generation the retry is exactly
+    // what should pick the abandoned item back up.
+    if let Some(uid) = queued.uid.clone() {
+        let env = env.clone();
+        exec.wait_until(async move {
+            let _ = crate::routes_channels::answer_and_deliver_now(&env, &uid, channel).await;
+        });
+    }
     Ok(ProcessedMessage {
-        queued,
+        queued: queued.queued,
         replied: false,
     })
 }
@@ -2537,7 +2624,7 @@ async fn handle_inbox_complete(mut req: Request, ctx: RouteContext<()>) -> Resul
 /// Port of `completeInboxItemDone`. Returns Ok(delivery) or Err(message).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn complete_inbox_done(
-    _env: &Env,
+    env: &Env,
     db: &worker::D1Database,
     uid: &str,
     id: &str,
@@ -2644,11 +2731,20 @@ pub(crate) async fn complete_inbox_done(
         }
     }
 
-    // NOTE: the TS handler best-effort calls dispatchChannelMessage (the
-    // DeliveryCoordinator DO) inside a try/catch that ignores failures. The DO
-    // port is a later phase; skipping it here matches the ignore-on-error
-    // semantics (the scheduled `deliverDueChannelMessages` also drains
-    // deliveries). See PORT_STATUS.md.
+    // Hand the finished reply straight to the DeliveryCoordinator, exactly as
+    // the TS handler did, inside the same ignore-on-error semantics (the
+    // scheduled `deliverDueChannelMessages` re-drains anything this misses).
+    // Without it a reply that was already written and paid for sat in
+    // `channel_deliveries` until the next cron tick — up to a minute of silence
+    // for no reason, since `crons = ["* * * * *"]` is Cloudflare's floor.
+    //
+    // Dispatching before the re-read below is deliberate: the row this returns
+    // then already carries the real outcome, so the app's `/complete` response
+    // reports `sent` rather than a `queued` it would have to poll for.
+    if let Some(channel) = Channel::parse(&channel) {
+        let _ =
+            crate::routes_channels::dispatch_channel_message(env, &delivery_id, uid, channel).await;
+    }
 
     let delivery = db
         .prepare(
