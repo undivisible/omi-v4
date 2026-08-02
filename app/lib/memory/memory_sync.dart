@@ -20,6 +20,7 @@ final class MemoryStatus {
     this.lastUploadAt,
     this.uploadedRecords = 0,
     this.scanFailure,
+    this.scanSkipReason,
   });
 
   /// When the on-device scan of files, notes and mail last finished.
@@ -39,6 +40,10 @@ final class MemoryStatus {
   /// user has not granted, or a source that failed.
   final String? scanFailure;
 
+  /// Why the scan did not run at all, when a gate stopped it before it reached
+  /// the hub. Null when nothing is holding the scan back.
+  final String? scanSkipReason;
+
   MemoryStatus copyWith({
     DateTime? lastScanAt,
     int? scannedItems,
@@ -46,12 +51,17 @@ final class MemoryStatus {
     int? uploadedRecords,
     String? scanFailure,
     bool clearScanFailure = false,
+    String? scanSkipReason,
+    bool clearScanSkipReason = false,
   }) => MemoryStatus(
     lastScanAt: lastScanAt ?? this.lastScanAt,
     scannedItems: scannedItems ?? this.scannedItems,
     lastUploadAt: lastUploadAt ?? this.lastUploadAt,
     uploadedRecords: uploadedRecords ?? this.uploadedRecords,
     scanFailure: clearScanFailure ? null : (scanFailure ?? this.scanFailure),
+    scanSkipReason: clearScanSkipReason
+        ? null
+        : (scanSkipReason ?? this.scanSkipReason),
   );
 
   @override
@@ -61,7 +71,8 @@ final class MemoryStatus {
       other.scannedItems == scannedItems &&
       other.lastUploadAt == lastUploadAt &&
       other.uploadedRecords == uploadedRecords &&
-      other.scanFailure == scanFailure;
+      other.scanFailure == scanFailure &&
+      other.scanSkipReason == scanSkipReason;
 
   @override
   int get hashCode => Object.hash(
@@ -70,6 +81,7 @@ final class MemoryStatus {
     lastUploadAt,
     uploadedRecords,
     scanFailure,
+    scanSkipReason,
   );
 }
 

@@ -411,6 +411,16 @@ class _MemoryStatusStrip extends StatelessWidget {
               ),
             ],
           ),
+          if (status.scanSkipReason case final skipped?)
+            Text(
+              skipped,
+              key: const Key('memory_status_skipped'),
+              style: TextStyle(
+                fontSize: 11.5,
+                height: 1.3,
+                color: colors.muted,
+              ),
+            ),
           if (status.scanFailure case final failure?)
             Text(
               failure,
