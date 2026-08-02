@@ -130,9 +130,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late SettingsSection selected =
       widget.initialSection ?? SettingsSection.account;
 
+  /// The account rows are drawn from [AuthController.snapshot], and in the
+  /// settings window the session is restored after the first frame, so without
+  /// this the window would open on "signed out" and stay there.
+  @override
+  void initState() {
+    super.initState();
+    widget.services.auth.addListener(_authChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.services.auth.removeListener(_authChanged);
+    super.dispose();
+  }
+
+  void _authChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void didUpdateWidget(SettingsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.services != widget.services) {
+      oldWidget.services.auth.removeListener(_authChanged);
+      widget.services.auth.addListener(_authChanged);
+    }
     final requested = widget.initialSection;
     if (requested != null && requested != oldWidget.initialSection) {
       selected = requested;
@@ -157,43 +180,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final previewMode = widget.previewMode;
     return switch (section) {
       SettingsSection.account => [
-        // Signed out, the row that says "Sign in" has to *be* the sign-in.
-        // Stating the account is missing and offering nothing to do about it
-        // leaves the whole screen looking inert, since most rows below need an
-        // account to become interactive.
-        if (previewMode || services.auth.snapshot.session != null)
-          _InfoTile(
+        // Auth is still looking for a stored session. Offering the sign-in
+        // form here would put it in front of a user who is already signed in
+        // and then yank it away a beat later.
+        if (!previewMode && services.auth.snapshot.settling)
+          const _InfoTile(
+            key: Key('account_restoring'),
             icon: Icons.person_outline_rounded,
             title: 'Sign in',
-            detail: previewMode
-                ? 'Account access is disabled in the interface preview.'
-                : services.auth.snapshot.session?.displayName ??
-                      services.configurationMessage,
+            detail: 'Checking your account…',
           )
-        else if (!services.auth.supportsChannelCode)
-          _InfoTile(
-            icon: Icons.person_outline_rounded,
-            title: 'Sign in',
-            detail: services.configurationMessage,
-          ),
-        if (!previewMode && services.auth.snapshot.session != null) ...[
-          _Tile(
-            icon: Icons.logout_rounded,
-            title: 'Log out',
-            detail: 'Sign out of this device. Your account data stays intact.',
-            trailing: TextButton(
-              key: const Key('sign_out'),
-              onPressed: () => unawaited(services.auth.signOut()),
-              child: const Text('Log out'),
+        else ...[
+          // Signed out, the row that says "Sign in" has to *be* the sign-in.
+          // Stating the account is missing and offering nothing to do about it
+          // leaves the whole screen looking inert, since most rows below need an
+          // account to become interactive.
+          if (previewMode || services.auth.snapshot.session != null)
+            _InfoTile(
+              icon: Icons.person_outline_rounded,
+              title: 'Sign in',
+              detail: previewMode
+                  ? 'Account access is disabled in the interface preview.'
+                  : services.auth.snapshot.session?.displayName ??
+                        services.configurationMessage,
+            )
+          else if (!services.auth.supportsChannelCode)
+            _InfoTile(
+              icon: Icons.person_outline_rounded,
+              title: 'Sign in',
+              detail: services.configurationMessage,
             ),
-          ),
-          DeleteAccountTile(services: services),
-          if (services.channels != null)
-            _ChannelLinkTile(client: services.channels!),
-        ] else if (!previewMode) ...[
-          if (services.auth.supportsChannelCode)
-            SignInWithCodeTile(services: services),
-          DeleteLocalDataTile(services: services),
+          if (!previewMode && services.auth.snapshot.session != null) ...[
+            _Tile(
+              icon: Icons.logout_rounded,
+              title: 'Log out',
+              detail:
+                  'Sign out of this device. Your account data stays intact.',
+              trailing: TextButton(
+                key: const Key('sign_out'),
+                onPressed: () => unawaited(services.auth.signOut()),
+                child: const Text('Log out'),
+              ),
+            ),
+            DeleteAccountTile(services: services),
+            if (services.channels != null)
+              _ChannelLinkTile(client: services.channels!),
+          ] else if (!previewMode) ...[
+            if (services.auth.supportsChannelCode)
+              SignInWithCodeTile(services: services),
+            DeleteLocalDataTile(services: services),
+          ],
         ],
       ],
       SettingsSection.personal => const [],
@@ -750,6 +786,7 @@ class _InfoTile extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.detail,
+    super.key,
   });
 
   final IconData icon;
@@ -1015,15 +1052,23 @@ class _ChannelLinkTileState extends State<_ChannelLinkTile> {
   bool _sheetOpen = false;
 
   Future<Set<ChannelProvider>> _load() async {
-    final linked = <ChannelProvider>{};
-    for (final channel in ChannelProvider.values) {
-      try {
-        if (await widget.client.isLinked(channel)) linked.add(channel);
-      } on ChannelClientException {
-        // A single channel's status failing must not blank the row.
-      }
+    // Asked all at once: one round trip per channel, run one after another,
+    // is the row sitting on "Checking your linked chats…" for as long as the
+    // slowest chain of them takes.
+    final statuses = await Future.wait(ChannelProvider.values.map(_isLinked));
+    return {
+      for (final (index, channel) in ChannelProvider.values.indexed)
+        if (statuses[index]) channel,
+    };
+  }
+
+  Future<bool> _isLinked(ChannelProvider channel) async {
+    try {
+      return await widget.client.isLinked(channel);
+    } on ChannelClientException {
+      // A single channel's status failing must not blank the row.
+      return false;
     }
-    return linked;
   }
 
   void _reload() {

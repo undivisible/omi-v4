@@ -267,7 +267,8 @@ final class AppServices {
 
   /// Services for the macOS settings window, which is a second FlutterEngine
   /// in the same process. It gets the worker-backed clients every settings row
-  /// reads and writes, and a restored auth session, but none of the machinery
+  /// reads and writes, and an auth session restored in the background, but
+  /// none of the machinery
   /// the hub window already runs: no Rust hub at launch, no memory sync pump,
   /// no memory mirror pump, and no second handle on the local memory database
   /// the primary engine already has open. The rows that genuinely need the hub
@@ -280,7 +281,11 @@ final class AppServices {
       gateway,
       consentStore: PreferencesConsentStore(),
     );
-    await auth.restoreSession();
+    // Not awaited: restoring reads the keychain and then refreshes the session
+    // over the network, and awaiting that here holds the settings window on an
+    // empty frame for as long as it takes. The screen listens to auth and
+    // fills the account rows in when the answer lands.
+    unawaited(auth.restoreSession());
     final worker = WorkerHttpClient(
       baseUri: Uri.parse(origin),
       sessionProvider: ({forceRefresh = false}) =>
@@ -342,6 +347,7 @@ final class AppServices {
     WorkerHttpClient? worker,
     ApiKeysClient? apiKeys,
     FaceTimeClient? facetime,
+    ChannelClient? channels,
     bool settingsWindow = false,
     String configurationMessage = 'Test services are not connected.',
   }) => AppServices._(
@@ -350,6 +356,7 @@ final class AppServices {
     worker: worker,
     apiKeys: apiKeys,
     facetime: facetime,
+    channels: channels,
     nativeHub: nativeHub,
     deviceRelay: deviceRelay,
     memoryDatabasePath: (uid) async => memoryDatabasePath(uid),
@@ -687,8 +694,11 @@ final class AppServices {
     if (_settingsWindow) {
       // The settings window shares the process with the hub window, so
       // starting a capture coordinator or a second copy of the memory stack
-      // here buys nothing and costs the whole window's responsiveness.
-      await capabilities.verifiedWorkspaceRoot();
+      // here buys nothing and costs the whole window's responsiveness. The
+      // workspace check reads preferences and the filesystem, and nothing in
+      // the first frame depends on its answer, so it runs alongside the paint
+      // rather than in front of it.
+      unawaited(capabilities.verifiedWorkspaceRoot());
       return;
     }
     // Started here, never awaited on the connect path: opening the log and

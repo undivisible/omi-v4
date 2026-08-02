@@ -19,6 +19,14 @@ class AppDelegate: FlutterAppDelegate {
     super.applicationDidFinishLaunching(notification)
     NSApp.activate(ignoringOtherApps: true)
     mainFlutterWindow?.makeKeyAndOrderFront(nil)
+    // Settings runs on its own Flutter engine, and starting one costs seconds.
+    // Build it here, once the hub is on screen and has had a moment to settle,
+    // so the menu bar's Settings item opens an engine that is already warm
+    // instead of booting one under the click.
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 3_000_000_000)
+      SettingsWindowController.prewarm()
+    }
   }
 
   @IBAction func openSettings(_ sender: Any?) {

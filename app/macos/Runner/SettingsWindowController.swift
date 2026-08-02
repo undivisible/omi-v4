@@ -3,8 +3,9 @@ import FlutterMacOS
 
 /// Hosts the settings UI in its own native macOS window, backed by a second
 /// Flutter engine running the `settingsMain` entrypoint (which renders only
-/// the settings screen). The window and engine are created lazily on first
-/// use and then kept alive: closing the window hides it, and every later
+/// the settings screen). The window and engine are built once — at launch via
+/// `prewarm`, or on first use if something opens settings before that — and
+/// then kept alive: closing the window hides it, and every later
 /// open fronts the same window instead of spawning another.
 @MainActor
 final class SettingsWindowController: NSWindowController {
@@ -38,6 +39,16 @@ final class SettingsWindowController: NSWindowController {
     return window
   }
 
+  /// Builds the window and its engine without showing anything. A cold
+  /// FlutterEngine start is seconds — Dart VM, plugin registration, first
+  /// frame — and paying it on the click that opens settings is exactly what
+  /// makes the first open feel broken. Launch has spare time; the click does
+  /// not.
+  static func prewarm() {
+    guard shared == nil else { return }
+    shared = make()
+  }
+
   static func show(section: String? = nil) {
     pendingSection = section
     if let existing = shared {
@@ -50,6 +61,12 @@ final class SettingsWindowController: NSWindowController {
       existing.front()
       return
     }
+    let controller = make()
+    shared = controller
+    controller.front()
+  }
+
+  private static func make() -> SettingsWindowController {
     let engine = FlutterEngine(name: "omi-settings", project: nil)
     engine.run(withEntrypoint: "settingsMain")
     RegisterGeneratedPlugins(registry: engine)
@@ -70,8 +87,11 @@ final class SettingsWindowController: NSWindowController {
       result(requested)
     }
     controller.routeChannel = route
-    shared = controller
-    controller.front()
+    // Loading the window forces the FlutterViewController's view into
+    // existence, so the engine renders its first frame now rather than on the
+    // open that wants to show it.
+    _ = controller.window
+    return controller
   }
 
   func front() {

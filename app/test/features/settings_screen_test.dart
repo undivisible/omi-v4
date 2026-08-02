@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
+import 'package:omi/channels/channel_client.dart';
+import 'package:omi/channels/channel_models.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/meeting_notes.dart';
 import 'package:omi/features/setup_account_screens.dart';
@@ -14,7 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  AppServices makeServices({AuthController? auth}) {
+  AppServices makeServices({AuthController? auth, ChannelClient? channels}) {
     final services = AppServices.forTesting(
       nativeHub: const UnavailableNativeHub('test'),
       deviceRelay: DeviceRelayService(
@@ -22,6 +24,7 @@ void main() {
         adapter: const UnavailableDeviceRelayAdapter(),
       ),
       auth: auth ?? AuthController(const UnconfiguredAuthGateway()),
+      channels: channels,
       memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
     );
     addTearDown(services.dispose);
@@ -247,6 +250,9 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final gateway = _Gateway();
     final services = makeServices(auth: AuthController(gateway));
+    // As in the app: the account rows wait on the restore rather than showing
+    // a sign-in form to someone who turns out to be signed in already.
+    await services.auth.restoreSession();
     await tester.pumpWidget(
       MaterialApp(home: SettingsScreen(services: services)),
     );
@@ -461,6 +467,77 @@ void main() {
     expect(services.dataWipes.value, 1);
     expect(tester.takeException(), isNull);
   });
+
+  // The settings window restores its session after the first frame rather
+  // than in front of it, so the screen has to hold the account rows until the
+  // answer lands and then rebuild on it. Without both halves the window either
+  // opens on a dead frame or opens on the wrong account state and stays there.
+  testWidgets('the account rows wait for the restore, then follow it', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final gateway = _Gateway()..restoreGate = Completer<AuthSession?>();
+    final services = makeServices(auth: AuthController(gateway));
+    unawaited(services.auth.restoreSession());
+    await tester.pumpWidget(
+      MaterialApp(home: SettingsScreen(services: services)),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('account_restoring')), findsOneWidget);
+    expect(find.byKey(const Key('settings_sign_in_code')), findsNothing);
+
+    gateway.restoreGate!.complete(null);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('account_restoring')), findsNothing);
+    expect(find.byKey(const Key('settings_sign_in_code')), findsOneWidget);
+  });
+
+  testWidgets('the linked-chat row asks every channel at once', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final transport = _CountingChannelTransport();
+    final services = makeServices(
+      auth: AuthController(_SignedInGateway()),
+      channels: ChannelClient(transport),
+    );
+    await services.auth.restoreSession();
+    await tester.pumpWidget(
+      MaterialApp(home: SettingsScreen(services: services)),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('channel_link_tile')), findsOneWidget);
+    // One round trip per channel, run one after another, is the row sitting on
+    // "Checking your linked chats…" for the sum of them.
+    expect(transport.peak, ChannelProvider.values.length);
+
+    transport.release();
+    await tester.pumpAndSettle();
+  });
+}
+
+/// Records how many channel status requests are in flight at once.
+final class _CountingChannelTransport implements AuthenticatedChannelTransport {
+  final _gate = Completer<void>();
+  int _inFlight = 0;
+  int peak = 0;
+
+  void release() {
+    if (!_gate.isCompleted) _gate.complete();
+  }
+
+  @override
+  Future<ChannelResponse> sendAuthenticated(ChannelRequest request) async {
+    _inFlight += 1;
+    if (_inFlight > peak) peak = _inFlight;
+    await _gate.future;
+    _inFlight -= 1;
+    return const ChannelResponse(
+      statusCode: 200,
+      body: {'channels': <Object?>[]},
+    );
+  }
 }
 
 final class _SignedInGateway implements AuthGateway {
@@ -537,6 +614,11 @@ final class _SignedInGateway implements AuthGateway {
 final class _Gateway implements AuthGateway {
   String? redeemedCode;
 
+  /// Holds the restore open so a test can look at the screen while auth is
+  /// still settling, the way the settings window looks on its first frame.
+  Completer<AuthSession?>? restoreGate;
+  AuthSession? restored;
+
   @override
   bool get isConfigured => true;
 
@@ -567,7 +649,8 @@ final class _Gateway implements AuthGateway {
   Stream<AuthSession?> get sessionChanges => const Stream.empty();
 
   @override
-  Future<AuthSession?> restoreSession() async => null;
+  Future<AuthSession?> restoreSession() =>
+      restoreGate?.future ?? Future.value(restored);
 
   @override
   Future<AuthSession?> refreshSession({bool forceRefresh = false}) async =>
