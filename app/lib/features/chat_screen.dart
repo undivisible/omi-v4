@@ -488,12 +488,14 @@ class ChatScreenState extends State<ChatScreen>
 
   Future<void> _refreshCurrents({bool force = false}) async {
     final currents = widget.services.currents;
-    // Currents come from the worker, so signed out there is nothing to ask
-    // for. The demo build is the exception: its currents client is a seeded
-    // in-process transport, and `omiDemoMode` is a compile-time constant, so
-    // outside that build this reads exactly as it did.
-    if (currents == null || !(widget.services.chatReady || omiDemoMode)) return;
-    await currents.load(force: force);
+    if (currents == null) return;
+    // With an account the worker composes currents from synced memory. Signed
+    // out, the hub's own memory store answers instead, so a local hub still
+    // gets real currents. The demo build takes the account path: its currents
+    // client is a seeded in-process transport, and `omiDemoMode` is a
+    // compile-time constant.
+    final offline = !(widget.services.chatReady || omiDemoMode);
+    await currents.load(force: force, offline: offline);
   }
 
   Future<void> _saveAssistantMessage({
@@ -1409,11 +1411,11 @@ class ChatScreenState extends State<ChatScreen>
         currents != null && !currents.loading && currents.error == null
         ? currents.items.take(4).toList()
         : const <CurrentCard>[];
-    // The same guard `_refreshCurrents` returns on: a hub in this state never
-    // asks for currents at all, so an empty list here is not an answer.
-    final currentsUnavailable =
-        !widget.previewMode &&
-        (currents == null || !(widget.services.chatReady || omiDemoMode));
+    // A hub with no currents client never asks for anything, so an empty list
+    // is not an answer; one that built its list from local memory did answer,
+    // and an empty list there means nothing has been captured yet.
+    final currentsUnavailable = !widget.previewMode && currents == null;
+    final currentsLocalOnly = currents != null && currents.localOnly;
     final exchange = _exchangeBuilders();
     final history = _historyBuildersNewestFirst();
     return Stack(
@@ -1525,6 +1527,8 @@ class ChatScreenState extends State<ChatScreen>
                                               currentsError: currents?.error,
                                               currentsUnavailable:
                                                   currentsUnavailable,
+                                              currentsLocalOnly:
+                                                  currentsLocalOnly,
                                               currentsLoading:
                                                   currents?.loading ?? false,
                                               onRetryCurrents: currents == null
@@ -2444,7 +2448,7 @@ class _CurrentsNotice extends StatelessWidget {
     final detail = this.detail;
     final action = this.action;
     final body = Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16),
+      padding: const EdgeInsets.symmetric(vertical: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2511,6 +2515,7 @@ class _ChatHome extends StatelessWidget {
     required this.onDraftPrompt,
     this.currentsError,
     this.currentsUnavailable = false,
+    this.currentsLocalOnly = false,
     this.currentsLoading = false,
     this.onRetryCurrents,
     this.showByokHint = false,
@@ -2547,10 +2552,14 @@ class _ChatHome extends StatelessWidget {
   /// needs attention" hides the two that need acting on.
   final String? currentsError;
 
-  /// The hub has no currents client, or no signed-in account to ask. Currents
-  /// are composed server-side from synced memory, so this state can never
-  /// resolve on its own.
+  /// The hub has no currents client at all, so nothing was ever asked for and
+  /// an empty list says nothing.
   final bool currentsUnavailable;
+
+  /// The currents on screen were built from this hub's own memory store rather
+  /// than synced from an account, so an empty list means nothing has been
+  /// captured here yet.
+  final bool currentsLocalOnly;
 
   /// A refresh is in flight. Nothing is claimed about the list until it lands.
   final bool currentsLoading;
@@ -2563,7 +2572,7 @@ class _ChatHome extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = _HubColors.of(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 28),
+      padding: const EdgeInsets.symmetric(vertical: 40),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2578,7 +2587,7 @@ class _ChatHome extends StatelessWidget {
                 OmiMarkAnchorTarget(
                   child: OmiIdleShowcase(size: 48, state: markState),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
                 Text(
                   greeting,
                   key: const Key('hub_greeting'),
@@ -2594,7 +2603,7 @@ class _ChatHome extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(height: 36),
+          const SizedBox(height: 48),
           // No "what matters next" heading and no "all tasks" link: this
           // section already IS what matters next, and anyone who wants the
           // full list can just ask the agent for it.
@@ -2624,13 +2633,12 @@ class _ChatHome extends StatelessWidget {
                     meetingNotes.isEmpty)
                   _CurrentsNotice(
                     key: const Key('hub_empty_start'),
-                    title: currentsUnavailable
-                        ? 'Currents aren’t syncing yet.'
+                    title: currentsUnavailable || currentsLocalOnly
+                        ? 'Nothing to show yet.'
                         : 'Nothing needs attention yet.',
-                    detail: currentsUnavailable
-                        ? 'Omi builds these from the memory on your account, '
-                              'and this hub is on its local store. Sign in to '
-                              'start syncing.'
+                    detail: currentsUnavailable || currentsLocalOnly
+                        ? 'Omi builds currents from what you capture. Start '
+                              'capturing and they’ll show up here.'
                         : null,
                     action: 'Tell Omi what you’re working on →',
                     onTap: () =>
@@ -3031,7 +3039,7 @@ class _TaskRow extends StatelessWidget {
           child: Opacity(
             opacity: done ? .45 : 1,
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 16),
+              padding: const EdgeInsets.symmetric(vertical: 20),
               child: Row(
                 children: [
                   InkWell(
@@ -3122,7 +3130,7 @@ class _RichTaskRow extends StatelessWidget {
           child: Opacity(
             opacity: done ? .45 : 1,
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
+              padding: const EdgeInsets.symmetric(vertical: 16),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -3413,7 +3421,7 @@ class _MeetingNoteRow extends StatelessWidget {
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
+          padding: const EdgeInsets.symmetric(vertical: 16),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

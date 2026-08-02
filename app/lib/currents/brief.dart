@@ -307,59 +307,6 @@ class _BriefShell extends StatelessWidget {
   );
 }
 
-/// The full-screen Now Brief the hub composes as one `.crepus` document.
-class _BriefInfographic extends StatelessWidget {
-  const _BriefInfographic({
-    required this.source,
-    required this.palette,
-    required this.proposedNextStep,
-    required this.onPrompt,
-    this.onDraftPrompt,
-    this.onComplete,
-    this.compact = false,
-    super.key,
-  });
-
-  final String source;
-  final CrepusCurrentPalette palette;
-  final String proposedNextStep;
-  final ValueChanged<String> onPrompt;
-  final ValueChanged<String>? onDraftPrompt;
-  final VoidCallback? onComplete;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    final shell = _BriefShell(
-      palette: palette,
-      compact: compact,
-      child: CrepusView.fromSource(
-        source,
-        theme: crepusThemeFor(palette),
-        onAction: (action) => unawaited(
-          dispatchCrepusAction(
-            action,
-            context: context,
-            onPrompt: onPrompt,
-            onDraftPrompt: onDraftPrompt,
-            proposedNextStep: proposedNextStep,
-            onComplete: onComplete,
-          ),
-        ),
-      ),
-    );
-    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) return shell;
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeOut,
-      builder: (context, value, child) =>
-          Opacity(opacity: value, child: child!),
-      child: shell,
-    );
-  }
-}
-
 class _BriefEyebrow extends StatelessWidget {
   const _BriefEyebrow({
     required this.palette,

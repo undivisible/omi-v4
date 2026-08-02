@@ -252,6 +252,16 @@ final class _SilentHub implements NativeHub {
   Stream<NativeEvent> get events => _events.stream;
 
   @override
+  void listMemoryItems({required String requestId, int limit = 50}) =>
+      scheduleMicrotask(
+        () => _events.add(
+          NativeEventMemoryItems(
+            value: MemoryItems(requestId: requestId, items: const []),
+          ),
+        ),
+      );
+
+  @override
   Future<void> initialize() async {}
 
   @override

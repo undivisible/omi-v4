@@ -113,6 +113,7 @@ final class AppServices {
                currentsClient,
                onItemsRefreshed: currentsTaskSync?.apply,
                hub: nativeHub,
+               local: LocalCurrentsSource(nativeHub, now: now),
                now: now,
              ),
        deviceAudio = DeviceAudioForwarder(relay: deviceRelay, hub: nativeHub),

@@ -658,6 +658,16 @@ final class _MeetingEventHub implements NativeHub {
   Stream<NativeEvent> get events => eventsController.stream;
 
   @override
+  void listMemoryItems({required String requestId, int limit = 50}) =>
+      scheduleMicrotask(
+        () => eventsController.add(
+          NativeEventMemoryItems(
+            value: MemoryItems(requestId: requestId, items: const []),
+          ),
+        ),
+      );
+
+  @override
   Future<void> initialize() async {}
 
   @override

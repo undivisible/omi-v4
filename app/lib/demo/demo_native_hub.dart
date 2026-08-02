@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import '../native/generated/signals/signals.dart'
-    show MemoryItems, NativeEventMemoryItems, SpeechProfileScope;
 import '../native/native_hub.dart';
 import 'demo_guide.dart';
 import 'demo_model.dart';

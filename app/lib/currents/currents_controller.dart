@@ -15,11 +15,16 @@ final class CurrentsController extends ChangeNotifier {
     this._client, {
     this.onItemsRefreshed,
     this.hub,
+    this.local,
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now;
 
   final CurrentsClient _client;
   final Future<void> Function(List<CurrentCard> items)? onItemsRefreshed;
+
+  /// Where currents come from with no account to sync against. Null means an
+  /// offline load produces nothing at all.
+  final LocalCurrentsSource? local;
 
   /// The hub the brief is composed by. Null, or unavailable, simply means the
   /// brief is never composed and the hand-built one renders.
@@ -36,17 +41,39 @@ final class CurrentsController extends ChangeNotifier {
   Future<void>? _loadFuture;
   int _composeGeneration = 0;
 
-  Future<void> load({bool force = false}) =>
-      _loadFuture ??= _load(force: force);
+  /// Whether the currents on screen were built from the local memory store
+  /// rather than synced from an account.
+  bool localOnly = false;
 
-  Future<void> _load({bool force = false}) async {
+  Future<void> load({bool force = false, bool offline = false}) =>
+      _loadFuture ??= _load(force: force, offline: offline);
+
+  Future<void> _load({bool force = false, bool offline = false}) async {
+    final carriedError = error;
     loading = true;
     error = null;
     briefCrepus = null;
     notifyListeners();
     try {
+      // An offline load replaces the list wholesale, and signing in refreshes
+      // from the account the same way, so the two sources never stack.
+      if (offline) {
+        final local = await this.local?.load();
+        if (local == null) {
+          // The local store could not be read at all, so nothing new is known
+          // and whatever is already on screen stands.
+          error = carriedError;
+          return;
+        }
+        items = local;
+        localOnly = true;
+        _notifyItemsRefreshed();
+        _composeBrief();
+        return;
+      }
       final outcome = await _client.refresh(force: force);
       items = outcome.items;
+      localOnly = false;
       _notifyItemsRefreshed();
       _composeBrief();
     } on CurrentsClientException catch (failure) {

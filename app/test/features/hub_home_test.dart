@@ -1082,9 +1082,16 @@ void main() {
   });
 
   testWidgets(
-    'a hub with no account to sync against names that as the reason',
+    'a hub with nothing captured yet says so instead of asking for an account',
     (tester) async {
-      final services = makeServices(
+      final services = AppServices.forTesting(
+        nativeHub: _EmptyMemoryHub(),
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        auth: AuthController(const UnconfiguredAuthGateway()),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
         currentsClient: CurrentsClient(_Transport()),
       );
       addTearDown(services.dispose);
@@ -1100,9 +1107,10 @@ void main() {
         ),
       );
       await tester.pump();
+      await tester.pump();
 
       expect(find.byKey(const Key('hub_empty_start')), findsOneWidget);
-      expect(find.text('Currents aren’t syncing yet.'), findsOneWidget);
+      expect(find.text('Nothing to show yet.'), findsOneWidget);
       expect(find.text('Nothing needs attention yet.'), findsNothing);
     },
   );
@@ -1122,6 +1130,35 @@ final class _EventHub implements NativeHub {
 
   @override
   void dispose() {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+final class _EmptyMemoryHub implements NativeHub {
+  final _events = StreamController<NativeEvent>.broadcast();
+
+  @override
+  bool get available => true;
+
+  @override
+  Stream<NativeEvent> get events => _events.stream;
+
+  @override
+  void listMemoryItems({required String requestId, int limit = 50}) =>
+      scheduleMicrotask(
+        () => _events.add(
+          NativeEventMemoryItems(
+            value: MemoryItems(requestId: requestId, items: const []),
+          ),
+        ),
+      );
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  void dispose() => _events.close();
 
   @override
   dynamic noSuchMethod(Invocation invocation) => null;
