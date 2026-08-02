@@ -108,6 +108,64 @@ async fn claim(
 /// deliveries and control-plane replies. Telegram goes through the real Bot API
 /// `sendMessage` method with `chat_id` + plain-text `text` (no `parse_mode`, so
 /// no MarkdownV2 escaping is required). `None` when credentials are missing.
+/// The three values every Sendblue call needs. Read together because a partial
+/// set is not a usable one, and because the historical name for each is still
+/// accepted — a deployment that predates the rename must not silently lose its
+/// iMessage line on a deploy.
+struct SendblueCredentials {
+    key_id: String,
+    key_secret: String,
+    from_number: String,
+}
+
+fn sendblue_credentials(env: &Env) -> Option<SendblueCredentials> {
+    let read = |name: &str| {
+        env.secret(name)
+            .ok()
+            .map(|v| v.to_string())
+            .or_else(|| env.var(name).ok().map(|v| v.to_string()))
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    Some(SendblueCredentials {
+        key_id: read("SENDBLUE_API_KEY_ID").or_else(|| read("SENDBLUE_API_KEY"))?,
+        key_secret: read("SENDBLUE_API_KEY_SECRET").or_else(|| read("SENDBLUE_SECRET_KEY"))?,
+        from_number: read("SENDBLUE_NUMBER")?,
+    })
+}
+
+/// Tell Sendblue the message has been seen, and show the typing bubble.
+///
+/// Both are cosmetic and both are best-effort: a failure changes nothing about
+/// whether the reply goes out. Read receipts in particular are expected to fail
+/// until Sendblue enables them for the line, which is a support request rather
+/// than a code change.
+async fn sendblue_signal(env: &Env, path: &str, body: Value) {
+    let Some(credentials) = sendblue_credentials(env) else {
+        return;
+    };
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    let headers = Headers::new();
+    if headers.set("sb-api-key-id", &credentials.key_id).is_err()
+        || headers
+            .set("sb-api-secret-key", &credentials.key_secret)
+            .is_err()
+        || headers.set("content-type", "application/json").is_err()
+    {
+        return;
+    }
+    init.with_headers(headers);
+    let mut body = body;
+    if let Some(object) = body.as_object_mut() {
+        object.insert("from_number".into(), Value::String(credentials.from_number));
+    }
+    init.with_body(Some(JsValue::from_str(&body.to_string())));
+    if let Ok(request) = Request::new_with_init(path, &init) {
+        let _ = Fetch::Request(request).send().await;
+    }
+}
+
 fn provider_send_request(
     env: &Env,
     channel: Channel,
@@ -138,42 +196,14 @@ fn provider_send_request(
         }
         Channel::IMessage => {
             // Sendblue only — mirrors worker/src/delivery.ts providerRequest.
-            let key_id = env
-                .secret("SENDBLUE_API_KEY_ID")
-                .ok()
-                .map(|v| v.to_string())
-                .or_else(|| env.var("SENDBLUE_API_KEY_ID").ok().map(|v| v.to_string()))
-                .or_else(|| env.secret("SENDBLUE_API_KEY").ok().map(|v| v.to_string()))
-                .or_else(|| env.var("SENDBLUE_API_KEY").ok().map(|v| v.to_string()))
-                .filter(|v| !v.is_empty());
-            let key_secret = env
-                .secret("SENDBLUE_API_KEY_SECRET")
-                .ok()
-                .map(|v| v.to_string())
-                .or_else(|| {
-                    env.var("SENDBLUE_API_KEY_SECRET")
-                        .ok()
-                        .map(|v| v.to_string())
-                })
-                .or_else(|| {
-                    env.secret("SENDBLUE_SECRET_KEY")
-                        .ok()
-                        .map(|v| v.to_string())
-                })
-                .or_else(|| env.var("SENDBLUE_SECRET_KEY").ok().map(|v| v.to_string()))
-                .filter(|v| !v.is_empty());
-            let from_number = env
-                .secret("SENDBLUE_NUMBER")
-                .ok()
-                .map(|v| v.to_string())
-                .or_else(|| env.var("SENDBLUE_NUMBER").ok().map(|v| v.to_string()))
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty());
-            let (Some(key_id), Some(key_secret), Some(from_number)) =
-                (key_id, key_secret, from_number)
-            else {
+            let Some(sendblue) = sendblue_credentials(env) else {
                 return Ok(None);
             };
+            let SendblueCredentials {
+                key_id,
+                key_secret,
+                from_number,
+            } = sendblue;
             let mut init = RequestInit::new();
             init.with_method(Method::Post);
             let headers = Headers::new();
@@ -1421,10 +1451,20 @@ pub async fn send_channel_text(
 /// is why nothing here returns an error and why the result is discarded at
 /// every call site.
 pub async fn send_typing(env: &Env, channel: Channel, chat_id: &str) {
-    // Telegram only. Sendblue has a typing-indicator surface, but sending on it
-    // is not something to guess at from a webhook list, and a wrong call on the
-    // iMessage path costs a real message.
-    if channel != Channel::Telegram {
+    if channel == Channel::IMessage {
+        // iMessage keeps the bubble up for as long as it is told to, unlike
+        // Telegram's fixed few seconds, so this is bounded explicitly rather
+        // than re-sent — see TYPING_MAX_DURATION_MS for why it is short.
+        sendblue_signal(
+            env,
+            crate::sendblue::TYPING_INDICATOR_ENDPOINT,
+            json!({
+                "number": chat_id,
+                "state": "start",
+                "max_duration_ms": crate::sendblue::TYPING_MAX_DURATION_MS,
+            }),
+        )
+        .await;
         return;
     }
     let token = env
@@ -1449,6 +1489,22 @@ pub async fn send_typing(env: &Env, channel: Channel, chat_id: &str) {
     if let Ok(request) = Request::new_with_init(&url, &init) {
         let _ = Fetch::Request(request).send().await;
     }
+}
+
+/// Mark the conversation read, so iMessage shows "Read" under what they sent.
+///
+/// Telegram has no equivalent — a bot marks messages read implicitly by
+/// receiving the update — so this is an iMessage-only courtesy.
+pub async fn mark_conversation_read(env: &Env, channel: Channel, chat_id: &str) {
+    if channel != Channel::IMessage {
+        return;
+    }
+    sendblue_signal(
+        env,
+        crate::sendblue::MARK_READ_ENDPOINT,
+        json!({ "number": chat_id }),
+    )
+    .await;
 }
 
 fn response_message_id(body: &Value) -> Option<String> {
@@ -1926,6 +1982,19 @@ async fn run_channel_tool(env: &Env, uid: &str, ctx: &ToolContext, name: &str, n
             ),
             Err(_) => tools::failed_result("Issuing the code failed. Ask them to try again."),
         },
+        // A link code attaches this chat to an account that is already signed
+        // in somewhere. Someone who has never signed in anywhere cannot use
+        // one: they would paste it into the app's sign-in box, where it is
+        // rejected for having the wrong purpose and reads as "your code is
+        // broken". The words that ask for the two are near-identical — "a code
+        // to link my desktop" is a sign-in code — so the situation decides,
+        // not the phrasing.
+        tools::GET_LINK_CODE if is_unclaimed_channel_account(env, uid).await => {
+            tools::failed_result(
+                "They have not signed in on any device yet, so a link code is the wrong one and \
+the app will reject it. Call get_signin_code instead.",
+            )
+        }
         tools::GET_LINK_CODE => match issue_link_code(
             env,
             ctx.channel,

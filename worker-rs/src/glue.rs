@@ -1683,8 +1683,10 @@ async fn process_channel_message(
     }
     // The message is going to the assistant, which takes seconds. Say so before
     // any of that starts, so the gap between sending and hearing back is a
-    // visible "working on it" rather than silence.
+    // visible "working on it" rather than silence. Reading it first, then
+    // typing, is the order a person would do it in.
     if fresh {
+        crate::routes_channels::mark_conversation_read(env, channel, channel_chat_id).await;
         crate::routes_channels::send_typing(env, channel, channel_chat_id).await;
     }
     let db = env.d1("DB")?;

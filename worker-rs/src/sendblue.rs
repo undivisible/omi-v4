@@ -8,6 +8,22 @@ use serde_json::{json, Value};
 use crate::crypto_util::constant_time_eq;
 
 pub const SEND_MESSAGE_ENDPOINT: &str = "https://api.sendblue.com/api/send-message";
+/// Marks the conversation read, so the blue "Read" line appears under what the
+/// sender wrote instead of their message sitting there looking ignored.
+///
+/// Sendblue gates this per account — it has to be switched on for the line by
+/// their engineering team — so a 4xx here is the expected answer until that is
+/// done, and is the reason nothing downstream treats a failure as an error.
+pub const MARK_READ_ENDPOINT: &str = "https://api.sendblue.com/api/mark-read";
+/// The "…" bubble, the iMessage counterpart to Telegram's chat action.
+pub const TYPING_INDICATOR_ENDPOINT: &str = "https://api.sendblue.com/api/send-typing-indicator";
+/// How long iMessage should keep the typing bubble up if nothing stops it.
+///
+/// Sendblue's own default is 60s and its ceiling is 5 minutes. A turn here is
+/// seconds, so this is set just past the slow case: long enough that it never
+/// expires mid-answer, short enough that a reply which dies on the way out
+/// does not leave a phantom "…" sitting in someone's thread for a minute.
+pub const TYPING_MAX_DURATION_MS: i64 = 20_000;
 pub const UPSTREAM_TIMEOUT_MS: i64 = 15_000;
 
 /// The channel literal every stored row still uses.
@@ -307,6 +323,21 @@ mod tests {
             ("sb-api-secret-key".to_string(), secret.to_string()),
             ("content-type".to_string(), "application/json".to_string()),
         ]
+    }
+
+    #[test]
+    fn the_courtesy_endpoints_match_the_documented_paths() {
+        // Transcribed from Sendblue's API v2 reference. They share the host and
+        // the sb-api-key-id / sb-api-secret-key headers with send-message, so
+        // the only thing that can drift is the path.
+        assert_eq!(MARK_READ_ENDPOINT, "https://api.sendblue.com/api/mark-read");
+        assert_eq!(
+            TYPING_INDICATOR_ENDPOINT,
+            "https://api.sendblue.com/api/send-typing-indicator"
+        );
+        // Sendblue accepts 1..=300_000 and defaults to a minute. A minute of
+        // phantom "…" after a reply that never arrives is worse than none.
+        const { assert!(TYPING_MAX_DURATION_MS >= 1 && TYPING_MAX_DURATION_MS < 60_000) };
     }
 
     #[test]

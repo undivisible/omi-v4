@@ -66,9 +66,10 @@ have been signed out — however they phrase it. Never invent a code yourself.",
         ),
         tool(
             GET_LINK_CODE,
-            "Mint a code that connects this chat to an Omi account they are already signed \
-into somewhere else. Call this only when they say they already have an account elsewhere and \
-want this chat attached to it. For getting into the app, use get_signin_code instead.",
+            "Mint a code that attaches this chat to an Omi account the person is ALREADY signed \
+into on a phone or desktop. This is the rarer of the two codes. Getting Omi onto a device — \
+including 'a code to link my desktop', which sounds like this one and is not — is \
+get_signin_code. Only use this when they have said they are already signed in somewhere else.",
         ),
         tool(
             GET_ACCOUNT_STATUS,
