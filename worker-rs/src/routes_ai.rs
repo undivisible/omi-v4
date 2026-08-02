@@ -318,11 +318,27 @@ pub async fn run_managed_inbox_turn(
         return None;
     }
     let gateway = managed_ai::ai_gateway_route(|name| env_get(env, name)).ok()?;
+    // The compat endpoint reads the provider off the front of the model id, so
+    // it has to be there. Direct-to-MiMo keeps the bare id.
+    let wire_model = if gateway.is_some() {
+        managed_ai::gateway_model(
+            &model,
+            &env_get(env, "CF_AI_GATEWAY_PROVIDER")
+                .unwrap_or_else(|| managed_ai::DEFAULT_GATEWAY_PROVIDER.to_string()),
+        )
+    } else {
+        model.clone()
+    };
     let trace_provider = if gateway.is_some() {
         "openrouter"
     } else {
         "mimo"
     };
+    // Two credentials, verified against the live endpoint: `authorization`
+    // carries the *provider* key and `cf-aig-authorization` (set below, from
+    // CF_AI_GATEWAY_TOKEN) carries the Cloudflare one. Sending only the
+    // Cloudflare token gets OpenRouter's own "No cookie auth credentials
+    // found"; sending only the provider key gets the gateway's AiGatewayError.
     let (endpoint_url, secret) = match &gateway {
         Some(route) => (
             worker::Url::parse(&route.url).ok()?,
@@ -394,7 +410,7 @@ pub async fn run_managed_inbox_turn(
 
     let message_values: Vec<Value> = messages.iter().map(managed_ai::Message::to_json).collect();
     let mut body = json!({
-        "model": model,
+        "model": wire_model,
         "messages": message_values,
         "stream": false,
         "max_tokens": WORKER_COMPLETION_MAX_OUTPUT_TOKENS,

@@ -40,6 +40,32 @@ pub struct AiGatewayRoute {
     pub token: Option<String>,
 }
 
+/// The provider the AI Gateway compat endpoint routes to when the model id
+/// does not already name one. Overridable with `CF_AI_GATEWAY_PROVIDER`.
+pub const DEFAULT_GATEWAY_PROVIDER: &str = "openrouter";
+
+/// The model id as the AI Gateway compat endpoint wants it: `provider/model`.
+///
+/// This is the difference between the compat endpoint and a provider-specific
+/// one. `/openrouter/v1/chat/completions` is already scoped to a provider, so a
+/// bare `inception/mercury-2` is unambiguous there; `/compat/chat/completions`
+/// is not scoped to anything, and reads the first path segment of the model id
+/// as the provider — so the same string would be sent looking for a provider
+/// called `inception`, which does not exist.
+///
+/// A model that already carries the provider prefix is left alone, so setting
+/// `OMI_MODEL_SPEED` to a fully-qualified id keeps working.
+pub fn gateway_model(model: &str, provider: &str) -> String {
+    let provider = provider.trim();
+    if provider.is_empty() {
+        return model.to_string();
+    }
+    if model.starts_with(&format!("{provider}/")) {
+        return model.to_string();
+    }
+    format!("{provider}/{model}")
+}
+
 pub fn ai_gateway_route(
     value: impl Fn(&str) -> Option<String>,
 ) -> Result<Option<AiGatewayRoute>, &'static str> {
@@ -75,7 +101,9 @@ pub fn ai_gateway_route(
         return Err("Cloudflare AI Gateway token is invalid");
     }
     Ok(Some(AiGatewayRoute {
-        url: format!("https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/openrouter/v1/chat/completions"),
+        url: format!(
+            "https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/compat/chat/completions"
+        ),
         token,
     }))
 }
@@ -881,11 +909,39 @@ mod tests {
         assert_eq!(
             route.url,
             format!(
-                "https://gateway.ai.cloudflare.com/v1/{}/default/openrouter/v1/chat/completions",
+                "https://gateway.ai.cloudflare.com/v1/{}/default/compat/chat/completions",
                 "f".repeat(32)
             )
         );
         assert_eq!(route.token.as_deref(), Some("gateway-token"));
+    }
+
+    #[test]
+    fn the_compat_endpoint_gets_a_provider_qualified_model() {
+        // Verified against the live gateway: `openrouter/xiaomi/mimo-v2.5`
+        // answers 200, a bare `xiaomi/mimo-v2.5` does not, because the compat
+        // endpoint reads the first segment as the provider.
+        assert_eq!(
+            gateway_model("xiaomi/mimo-v2.5", "openrouter"),
+            "openrouter/xiaomi/mimo-v2.5"
+        );
+        assert_eq!(
+            gateway_model("inception/mercury-2", "openrouter"),
+            "openrouter/inception/mercury-2"
+        );
+    }
+
+    #[test]
+    fn a_model_that_already_names_its_provider_is_left_alone() {
+        // Otherwise overriding OMI_MODEL_SPEED with a fully-qualified id would
+        // double the prefix and 404.
+        assert_eq!(
+            gateway_model("openrouter/openai/gpt-5.6-luna", "openrouter"),
+            "openrouter/openai/gpt-5.6-luna"
+        );
+        // An empty provider means "send it as written" rather than "/model".
+        assert_eq!(gateway_model("xiaomi/mimo-v2.5", ""), "xiaomi/mimo-v2.5");
+        assert_eq!(gateway_model("xiaomi/mimo-v2.5", "   "), "xiaomi/mimo-v2.5");
     }
     use serde_json::json;
 
