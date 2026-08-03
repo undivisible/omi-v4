@@ -100,11 +100,9 @@ final class AppServices {
     LiveVoiceCapture? liveVoice,
     this.liveVoiceTokens,
     SystemAudioCaptureModeStore? captureModeStore,
-    bool settingsWindow = false,
+    this.isSettingsWindow = false,
     this._meetingMic,
-  }) : _settingsWindow = settingsWindow,
-       _deferredNativeSetup = settingsWindow,
-       _captureModeStore =
+  }) : _captureModeStore =
            captureModeStore ?? PreferencesSystemAudioCaptureModeStore(),
        _currentsTaskSync = currentsTaskSync,
        currents = currentsClient == null
@@ -277,11 +275,13 @@ final class AppServices {
   /// in the same process. It gets the worker-backed clients every settings row
   /// reads and writes, and an auth session restored in the background, but
   /// none of the machinery
-  /// the hub window already runs: no Rust hub at launch, no memory sync pump,
+  /// the hub window already runs: no Rust hub, no memory sync pump,
   /// no memory mirror pump, and no second handle on the local memory database
-  /// the primary engine already has open. The rows that genuinely need the hub
-  /// (Rewind, the profile editor, calendar import) bring it up on demand
-  /// through [ensureNativeHubReady] / [activateNativeServices].
+  /// the primary engine already has open. Nor can it have them — rinf keeps
+  /// one Dart isolate handle per process, so a hub started here would be
+  /// started at the hub window's expense. The rows that genuinely need the hub
+  /// (Rewind, the personal-context scan, calendar import) say so and offer to
+  /// open themselves in the hub window instead.
   static Future<AppServices> initializeForSettingsWindow() async {
     final origin = apiOrigin();
     final gateway = WorkerAuthGateway(apiOrigin: Uri.parse(origin));
@@ -322,7 +322,7 @@ final class AppServices {
       currentsTaskSync: EventKitTaskSync.platformDefault(),
       worker: worker,
       workerOrigin: worker.trustedOrigin,
-      settingsWindow: true,
+      isSettingsWindow: true,
     );
   }
 
@@ -359,7 +359,7 @@ final class AppServices {
     bool settingsWindow = false,
     String configurationMessage = 'Test services are not connected.',
   }) => AppServices._(
-    settingsWindow: settingsWindow,
+    isSettingsWindow: settingsWindow,
     auth: auth,
     worker: worker,
     apiKeys: apiKeys,
@@ -488,11 +488,12 @@ final class AppServices {
 
   final MemorySyncPump? memorySyncPump;
 
-  /// True for the second FlutterEngine that renders only settings.
-  final bool _settingsWindow;
+  /// True for the second FlutterEngine that renders only settings, which can
+  /// never reach the Rust hub: rinf binds one Dart isolate to it per process
+  /// and the hub window holds that binding, so anything here that needs the
+  /// hub has to be shown in the hub window instead.
+  final bool isSettingsWindow;
 
-  /// Cleared the first time a settings row asks for the native stack.
-  bool _deferredNativeSetup;
   MemoryMirrorPump? _memoryMirrorPump;
   bool _memoryStatusLoaded = false;
   PreferencesMemorySyncCursorStore? _memoryCursorStore;
@@ -623,7 +624,7 @@ final class AppServices {
   /// a line the previous pass already stored updates in place instead of
   /// duplicating.
   Future<void> refreshPersonalContext({bool force = false}) async {
-    if (_disposed || _settingsWindow || !_nativeInitialized) return;
+    if (_disposed || isSettingsWindow || !_nativeInitialized) return;
     final personId = _configuredPersonId;
     if (personId == null) return;
     await _loadMemoryStatus();
@@ -879,7 +880,7 @@ final class AppServices {
 
   Future<void> initialize() async {
     auth.addListener(_authChanged);
-    if (_settingsWindow) {
+    if (isSettingsWindow) {
       // The settings window shares the process with the hub window, so
       // starting a capture coordinator or a second copy of the memory stack
       // here buys nothing and costs the whole window's responsiveness. The
@@ -897,30 +898,24 @@ final class AppServices {
     await _queueProductionSync();
   }
 
-  /// Whether the native stack is still deferred: true in the settings window
-  /// until a row that needs the hub asks for it.
-  bool get nativeSetupDeferred => _deferredNativeSetup;
-
   /// Brings the Rust hub up without configuring memory or the assistant, for
   /// rows that talk to the hub directly (Rewind). Serialised through the same
   /// lifecycle queue as the production sync so two rows asking at once cannot
   /// subscribe to the event stream twice.
+  ///
+  /// Always false in the settings window. `initializeRust` replaces rinf's one
+  /// global Dart isolate handle and restarts the Rust runtime, so calling it
+  /// from the second engine would take every Rust signal away from the hub
+  /// window and tear down the capture, transcription and meeting tasks it is
+  /// running. There is no second isolate to initialise.
   Future<bool> ensureNativeHubReady() {
     if (_nativeInitialized) return Future.value(true);
+    if (isSettingsWindow) return Future.value(false);
     final operation = _lifecycle
         .then<void>((_) {}, onError: (_, _) {})
         .then((_) => _ensureNativeInitialized());
     _lifecycle = operation.then<void>((_) {}, onError: (_, _) {});
     return operation;
-  }
-
-  /// Configures the full native stack — hub, memory store, assistant — for a
-  /// row that cannot work without it (the profile editor, calendar import).
-  /// A no-op outside the settings window, where it already ran at launch.
-  Future<void> activateNativeServices() async {
-    if (!_deferredNativeSetup) return;
-    _deferredNativeSetup = false;
-    await _queueProductionSync();
   }
 
   bool get productionReady {
@@ -1596,7 +1591,7 @@ final class AppServices {
   }
 
   Future<void> _queueProductionSync() {
-    if (_deferredNativeSetup) return Future<void>.value();
+    if (isSettingsWindow) return Future<void>.value();
     final operation = _lifecycle
         .then<void>((_) {}, onError: (_, _) {})
         .then((_) => _syncProductionState());
@@ -1733,7 +1728,7 @@ final class AppServices {
         kIsWeb ||
         // The hub window owns the mirror; a second pump on the same replica
         // would fight it for the same cursor.
-        _settingsWindow ||
+        isSettingsWindow ||
         !nativeHub.available ||
         _disposed ||
         !productionReady) {

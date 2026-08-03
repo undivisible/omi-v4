@@ -9,6 +9,7 @@ import 'demo/demo_app.dart';
 import 'demo/demo_mode.dart';
 import 'demo/demo_tour.dart';
 import 'features/desktop_auth_screen.dart';
+import 'features/hub_window_route.dart';
 import 'features/mobile_companion_shell.dart';
 import 'features/mobile_onboarding_screen.dart';
 import 'features/omi_shell.dart';
@@ -56,9 +57,9 @@ Future<void> main() async {
   }
   final services = await AppServices.initializeFromEnvironment();
   await services.initialize();
-  // Rewind's capture loop belongs to the primary engine, and only to it: the
-  // settings window is a second engine and gets a non-capturing instance. It
-  // starts idle — recording stays off until the user turns it on.
+  // Rewind's capture loop belongs to the primary engine, and only to it: it
+  // is the engine rinf bound the Rust hub to. It starts idle — recording stays
+  // off until the user turns it on.
   if (rewindSupported) {
     unawaited(
       RewindRuntime.instance.resolve(hub: services.nativeHub, captures: true),
@@ -89,12 +90,6 @@ Future<void> pillMain() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const PillPanelApp());
 }
-
-/// The channel the settings engine shares with the Runner. Opening settings
-/// can name a section, and the window may already be up when that happens, so
-/// the Runner both answers `pendingSection` while this engine boots and calls
-/// `showSection` on it afterwards.
-const settingsRouteChannel = MethodChannel('omi/settings_route');
 
 class SettingsWindowApp extends StatefulWidget {
   const SettingsWindowApp({required this.services, super.key});

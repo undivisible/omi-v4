@@ -78,13 +78,24 @@ final class SettingsWindowController: NSWindowController {
       name: "omi/settings_route",
       binaryMessenger: engine.binaryMessenger)
     route.setMethodCallHandler { call, result in
-      guard call.method == "pendingSection" else {
+      switch call.method {
+      case "pendingSection":
+        let requested = pendingSection
+        pendingSection = nil
+        result(requested)
+      case "openInHub":
+        guard let hub = MainFlutterWindow.shared else {
+          result(
+            FlutterError(
+              code: "no-hub-window", message: "The Omi window is not open.", details: nil))
+          return
+        }
+        shared?.window?.orderOut(nil)
+        hub.showSettingsSection(call.arguments as? String)
+        result(nil)
+      default:
         result(FlutterMethodNotImplemented)
-        return
       }
-      let requested = pendingSection
-      pendingSection = nil
-      result(requested)
     }
     controller.routeChannel = route
     // Loading the window forces the FlutterViewController's view into

@@ -64,6 +64,7 @@ class _OmiShellState extends State<OmiShell> {
     super.initState();
     if (widget.previewMode) return;
     if (_isMacDesktop) {
+      _windowChromeChannel.setMethodCallHandler(_handleWindowChromeCall);
       unawaited(_enterHubChrome());
     }
     _cursorPill = CursorPillController.forServices(
@@ -151,6 +152,16 @@ class _OmiShellState extends State<OmiShell> {
         duration: const Duration(seconds: 8),
       ),
     );
+  }
+
+  /// The settings window asking this window to take over a section it cannot
+  /// render, because the section needs the Rust hub and this engine is the one
+  /// holding it. The Runner has already fronted this window by the time the
+  /// call lands.
+  Future<Object?> _handleWindowChromeCall(MethodCall call) async {
+    if (call.method != 'showSettingsSection') return null;
+    _openSettingsRoute(SettingsSection.tryParse(call.arguments as String?));
+    return null;
   }
 
   Future<void> _enterHubChrome() async {
@@ -300,6 +311,9 @@ class _OmiShellState extends State<OmiShell> {
 
   @override
   void dispose() {
+    if (!widget.previewMode && _isMacDesktop) {
+      _windowChromeChannel.setMethodCallHandler(null);
+    }
     unawaited(_meetingStateEvents?.cancel());
     unawaited(_menuBar?.dispose());
     unawaited(_disposeDesktopGesture());

@@ -579,6 +579,10 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private let globalInputTap = GlobalInputTap()
   private var activationObservers: [NSObjectProtocol] = []
   private var pillHostChannel: FlutterMethodChannel?
+  private var windowChromeChannel: FlutterMethodChannel?
+  /// The hub window, so the settings window can hand a section back to the
+  /// engine that actually holds the Rust hub.
+  static weak var shared: MainFlutterWindow?
   private var lastLeftShiftDown = false
   private var lastRightShiftDown = false
   private var lastSecureInput: Bool?
@@ -591,6 +595,18 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   func requestSettings() {
     SettingsWindowController.show()
+  }
+
+  /// Brings the hub window forward and asks its engine to show a settings
+  /// section in its own in-window route. Rewind, the personal-context scan
+  /// and calendar import all speak to the Rust hub, and rinf binds that hub
+  /// to one Dart isolate per process — this engine's — so those sections can
+  /// only work here.
+  func showSettingsSection(_ section: String?) {
+    guard let channel = windowChromeChannel else { return }
+    NSApp.activate(ignoringOtherApps: true)
+    makeKeyAndOrderFront(nil)
+    channel.invokeMethod("showSettingsSection", arguments: section)
   }
 
   override var canBecomeKey: Bool { true }
@@ -694,6 +710,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   }
 
   override func awakeFromNib() {
+    MainFlutterWindow.shared = self
     let flutterViewController = FlutterViewController()
     // The nib carries a small centred rect; the shell should own the display.
     // `visibleFrame`, not `frame`: the latter includes the menu bar and dock
@@ -911,6 +928,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     let windowChrome = FlutterMethodChannel(
       name: "omi/window_chrome",
       binaryMessenger: flutterViewController.engine.binaryMessenger)
+    windowChromeChannel = windowChrome
     windowChrome.setMethodCallHandler { [weak self] call, result in
       switch call.method {
       case "enterHub":

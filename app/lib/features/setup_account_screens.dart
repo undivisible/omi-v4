@@ -24,6 +24,7 @@ import '../settings/settings.dart';
 import '../ui/burst_glow.dart';
 import '../ui/omi_orb.dart';
 import '../ui/scroll_edge_fade.dart';
+import 'hub_window_route.dart';
 import 'meeting_notes.dart';
 import '../profile/user_profile_settings_panel.dart';
 import 'rewind/rewind_settings_tile.dart';
@@ -189,12 +190,24 @@ List<Widget> settingsSectionTiles(
         ),
     ],
     SettingsSection.calendar => [
-      for (final source in AppleEventKitSource.values)
-        AppleEventKitConnectionTile(
-          services: services,
-          source: source,
-          previewMode: previewMode,
-        ),
+      if (services.isSettingsWindow)
+        HubWindowSectionTile(
+          section: SettingsSection.calendar.name,
+          icon: Icons.calendar_today_outlined,
+          title: 'Calendar import runs in the Omi window',
+          detail:
+              'Importing events and reminders writes them into the memory '
+              'store, which only the main Omi window has open. Connect them '
+              'there.',
+          actionLabel: 'Open Calendar in Omi',
+        )
+      else
+        for (final source in AppleEventKitSource.values)
+          AppleEventKitConnectionTile(
+            services: services,
+            source: source,
+            previewMode: previewMode,
+          ),
       EventKitProactiveSyncTile(
         previewMode: previewMode,
         onEnabled: services.syncCurrentsToEventKit,
@@ -219,6 +232,17 @@ List<Widget> settingsSectionTiles(
     SettingsSection.rewind => [
       if (previewMode)
         const RewindSettingsTile(previewMode: true)
+      else if (services.isSettingsWindow)
+        HubWindowSectionTile(
+          section: SettingsSection.rewind.name,
+          icon: Icons.history_toggle_off_rounded,
+          title: 'Rewind runs in the Omi window',
+          detail:
+              'Rewind talks to the capture engine, and only the main Omi '
+              'window is connected to it. Open Rewind there to see whether '
+              'it is recording and to turn it on or off.',
+          actionLabel: 'Open Rewind in Omi',
+        )
       else
         _RewindSection(services: services),
     ],
@@ -988,9 +1012,9 @@ class _SignInWithCodeTileState extends State<SignInWithCodeTile> {
   }
 }
 
-/// Rewind talks to the Rust hub directly, and the settings window does not
-/// bring the hub up at launch. Ask for it when this row is actually shown, so
-/// opening any other section never pays for it.
+/// Rewind talks to the Rust hub directly, and the hub window does not bring
+/// the hub up until it has something to configure. Ask for it when this row is
+/// actually shown, so opening any other section never pays for it.
 class _RewindSection extends StatefulWidget {
   const _RewindSection({required this.services});
 

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app_services.dart';
+import '../features/hub_window_route.dart';
 import '../memory/memory_sync.dart';
 import '../native/native_hub.dart';
 import '../random_id.dart';
@@ -382,59 +383,80 @@ class _MemoryStatusStrip extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<MemoryStatus>(
-    valueListenable: services.memoryStatus,
-    builder: (context, status, _) => Padding(
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '${status.scannedItems} items read · scanned '
-                  '${_ago(status.lastScanAt)} · synced '
-                  '${_ago(status.lastUploadAt)}',
-                  key: const Key('memory_status_summary'),
-                  style: TextStyle(fontSize: 11.5, color: colors.muted),
+  Widget build(BuildContext context) {
+    // The settings window never opens the memory store, so the counters here
+    // would all read zero and Scan now would do nothing at all. Send the user
+    // to the window that can answer instead of lying to them.
+    if (services.isSettingsWindow) {
+      return const HubWindowSectionTile(
+        section: 'personal',
+        icon: Icons.psychology_outlined,
+        title: 'Scanning runs in the Omi window',
+        detail:
+            'Reading this machine and syncing what it finds happens in the '
+            'main Omi window, which is the one holding the memory store. Its '
+            'personal context section shows what has been read and can scan '
+            'again.',
+        actionLabel: 'Open Personal context in Omi',
+      );
+    }
+    return ValueListenableBuilder<MemoryStatus>(
+      valueListenable: services.memoryStatus,
+      builder: (context, status, _) => Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${status.scannedItems} items read · scanned '
+                    '${_ago(status.lastScanAt)} · synced '
+                    '${_ago(status.lastUploadAt)}',
+                    key: const Key('memory_status_summary'),
+                    style: TextStyle(fontSize: 11.5, color: colors.muted),
+                  ),
+                ),
+                TextButton(
+                  key: const Key('memory_status_rescan'),
+                  onPressed: previewMode
+                      ? null
+                      : () => unawaited(
+                          services.refreshPersonalContext(force: true),
+                        ),
+                  child: const Text(
+                    'Scan now',
+                    style: TextStyle(fontSize: 11.5),
+                  ),
+                ),
+              ],
+            ),
+            if (status.scanSkipReason case final skipped?)
+              Text(
+                skipped,
+                key: const Key('memory_status_skipped'),
+                style: TextStyle(
+                  fontSize: 11.5,
+                  height: 1.3,
+                  color: colors.muted,
                 ),
               ),
-              TextButton(
-                key: const Key('memory_status_rescan'),
-                onPressed: previewMode
-                    ? null
-                    : () => unawaited(
-                        services.refreshPersonalContext(force: true),
-                      ),
-                child: const Text('Scan now', style: TextStyle(fontSize: 11.5)),
+            if (status.scanFailure case final failure?)
+              Text(
+                failure,
+                key: const Key('memory_status_failure'),
+                style: TextStyle(
+                  fontSize: 11.5,
+                  height: 1.3,
+                  color: Theme.of(context).colorScheme.error,
+                ),
               ),
-            ],
-          ),
-          if (status.scanSkipReason case final skipped?)
-            Text(
-              skipped,
-              key: const Key('memory_status_skipped'),
-              style: TextStyle(
-                fontSize: 11.5,
-                height: 1.3,
-                color: colors.muted,
-              ),
-            ),
-          if (status.scanFailure case final failure?)
-            Text(
-              failure,
-              key: const Key('memory_status_failure'),
-              style: TextStyle(
-                fontSize: 11.5,
-                height: 1.3,
-                color: Theme.of(context).colorScheme.error,
-              ),
-            ),
-        ],
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _Bubble extends StatelessWidget {

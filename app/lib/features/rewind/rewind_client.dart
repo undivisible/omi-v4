@@ -96,8 +96,8 @@ final class RewindClient extends ChangeNotifier {
   final Duration tickInterval;
   final Duration responseTimeout;
 
-  /// False in the settings window's engine, which shares the settings file but
-  /// must never open a second capture loop of its own.
+  /// False for a client that only reads the engine's state, so that no second
+  /// capture loop is ever opened alongside the primary engine's.
   final bool captures;
 
   Timer? _timer;
@@ -377,9 +377,9 @@ final class RewindClient extends ChangeNotifier {
   }
 }
 
-/// Process-wide access to the Rewind client. Each Flutter engine gets one
-/// instance; only the primary engine's instance captures, because only it
-/// registers the native bridge.
+/// Process-wide access to the Rewind client. Only the primary engine has one:
+/// it is the engine rinf bound the Rust hub to, and the only one that
+/// registers the native capture bridge.
 final class RewindRuntime {
   RewindRuntime._();
 
@@ -388,9 +388,7 @@ final class RewindRuntime {
   RewindClient? _client;
   Future<RewindClient>? _pending;
 
-  /// [captures] is true for the primary engine and false for the settings
-  /// window, which shares the settings file and the frame store but must not
-  /// run a capture loop.
+  /// [captures] is true for the primary engine, which owns the capture loop.
   Future<RewindClient> resolve({
     required NativeHub hub,
     required bool captures,

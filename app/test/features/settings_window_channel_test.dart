@@ -7,6 +7,7 @@ import 'package:omi/auth/auth.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/omi_shell.dart';
 import 'package:omi/features/setup_account_screens.dart';
+import 'package:omi/features/hub_window_route.dart';
 import 'package:omi/main.dart';
 import 'package:omi/native/native_hub.dart';
 
