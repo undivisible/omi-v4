@@ -86,6 +86,56 @@ void main() {
     expect((await controller.validSession())?.uid, 'firebase-uid');
   });
 
+  // The gateway announces its session on a stream the controller also listens
+  // to, so the announcement is applied alongside the sign-in that caused it.
+  // A receipt read that started before consent was recorded comes back empty,
+  // and applying that emptied the authority a beat after signing in worked —
+  // which is exactly "you have not properly signed in", every single time.
+  test('a session announced mid sign-in does not undo the consent just '
+      'recorded', () async {
+    final gateway = _FakeAuthGateway(session);
+    final controller = AuthController(
+      gateway,
+      consentStore: _ForgetfulConsentStore(),
+    );
+
+    await controller.restoreSession();
+    await controller.signInWithChannelCode('ABC1234');
+    expect(controller.snapshot.standing, AccountStanding.active);
+
+    gateway.announce(session);
+    await pumpEventQueue();
+
+    expect(controller.snapshot.standing, AccountStanding.active);
+  });
+
+  // The same leniency must not survive an account switch: a receipt for one
+  // subject says nothing about another.
+  test('an announced session for another subject has no authority', () async {
+    final gateway = _FakeAuthGateway(session);
+    final controller = AuthController(
+      gateway,
+      consentStore: _ForgetfulConsentStore(),
+    );
+
+    await controller.restoreSession();
+    await controller.signInWithChannelCode('ABC1234');
+
+    gateway.announce(
+      AuthSession(
+        uid: 'someone-else',
+        idToken: 'other-token',
+        expiresAt: DateTime.utc(2030),
+      ),
+    );
+    await pumpEventQueue();
+
+    expect(
+      controller.snapshot.standing,
+      AccountStanding.processingConsentMissing,
+    );
+  });
+
   test('OAuth failure remains typed and does not create a session', () async {
     final gateway = _FakeAuthGateway(session)
       ..failure = const AuthFailure(
@@ -404,6 +454,19 @@ final class _FailingConsentStore implements ConsentStore {
       throw const ConsentPersistenceException('failed');
 }
 
+/// Accepts the receipt and never hands it back, standing in for the read that
+/// raced the write and missed it.
+final class _ForgetfulConsentStore implements ConsentStore {
+  @override
+  Future<ProcessingConsentReceipt?> currentReceipt() async => null;
+
+  @override
+  Future<void> save(ProcessingConsentReceipt receipt) async {}
+
+  @override
+  Future<void> revoke() async {}
+}
+
 final class _FakeAuthGateway implements AuthGateway {
   _FakeAuthGateway(
     this.session, {
@@ -450,8 +513,12 @@ final class _FakeAuthGateway implements AuthGateway {
   @override
   AuthSession? get currentSession => initialSession;
 
+  final _announcements = StreamController<AuthSession?>.broadcast();
+
+  void announce(AuthSession? value) => _announcements.add(value);
+
   @override
-  Stream<AuthSession?> get sessionChanges => const Stream.empty();
+  Stream<AuthSession?> get sessionChanges => _announcements.stream;
 
   @override
   Future<AuthSession?> restoreSession() async => initialSession;

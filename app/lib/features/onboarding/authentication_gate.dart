@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
 import '../../auth/auth.dart';
@@ -21,11 +22,32 @@ class AuthenticationGate extends StatefulWidget {
 
 class _AuthenticationGateState extends State<AuthenticationGate> {
   final code = TextEditingController();
+  String? _clipboardNote;
 
   @override
   void dispose() {
     code.dispose();
     super.dispose();
+  }
+
+  /// Pasting is the other way in, and on a phone it is the usual one: the code
+  /// arrives in Messages or Telegram and is copied from there. Redeem a clean
+  /// paste immediately rather than making the user press a second button.
+  Future<void> _paste() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) return;
+    final normalized = normalizeSignInCode(data?.text ?? '');
+    if (normalized == null) {
+      setState(
+        () => _clipboardNote =
+            'The clipboard does not hold a sign-in code. Copy the seven '
+            'characters the bot sent.',
+      );
+      return;
+    }
+    code.text = normalized;
+    setState(() => _clipboardNote = null);
+    await widget.auth.signInWithChannelCode(normalized);
   }
 
   @override
@@ -91,9 +113,12 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
           ),
           if (widget.auth.supportsChannelCode) ...[
             Text(
-              'Ask Omi for a sign-in code: text ${AppServices.messagingNumber()}, '
-              'or message ${AppServices.telegramHandle()} on Telegram, and say '
-              '"send me a sign-in code". It replies with seven characters.',
+              _clipboardNote ??
+                  'Ask Omi for a sign-in code: text '
+                      '${AppServices.messagingNumber()}, or message '
+                      '${AppServices.telegramHandle()} on Telegram, and say '
+                      '"send me a sign-in code". It replies with seven '
+                      'characters — paste them in or type them.',
             ),
             const SizedBox(height: 10),
             TextField(
@@ -102,11 +127,19 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
               autocorrect: false,
               enableSuggestions: false,
               autofillHints: const [AutofillHints.oneTimeCode],
-              textCapitalization: TextCapitalization.none,
+              textCapitalization: TextCapitalization.characters,
               textInputAction: TextInputAction.done,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Sign-in code',
-                hintText: 'ab12cd3',
+                hintText: signInCodeExample,
+                suffixIcon: IconButton(
+                  key: const Key('paste_channel_code'),
+                  tooltip: 'Paste code',
+                  icon: const Icon(Icons.content_paste_rounded, size: 18),
+                  onPressed: busy || !snapshot.consentGranted
+                      ? null
+                      : () => unawaited(_paste()),
+                ),
               ),
               onSubmitted: busy || !snapshot.consentGranted
                   ? null

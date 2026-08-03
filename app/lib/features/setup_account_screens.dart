@@ -949,6 +949,7 @@ class SignInWithCodeTile extends StatefulWidget {
 class _SignInWithCodeTileState extends State<SignInWithCodeTile> {
   final _code = TextEditingController();
   bool _busy = false;
+  String? _clipboardNote;
 
   @override
   void dispose() {
@@ -958,7 +959,10 @@ class _SignInWithCodeTileState extends State<SignInWithCodeTile> {
 
   Future<void> _submit() async {
     if (_busy) return;
-    setState(() => _busy = true);
+    setState(() {
+      _busy = true;
+      _clipboardNote = null;
+    });
     try {
       await widget.services.auth.signInWithChannelCode(_code.text);
     } finally {
@@ -966,47 +970,140 @@ class _SignInWithCodeTileState extends State<SignInWithCodeTile> {
     }
   }
 
+  /// Most people arrive here holding the code in the clipboard, having copied
+  /// it out of the chat the bot sent it in. Typing seven characters back in by
+  /// hand is where the mis-keying happens, so offer the copy directly — and
+  /// redeem it straight away, since a code that reads cleanly needs no
+  /// confirming.
+  Future<void> _paste() async {
+    if (_busy) return;
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) return;
+    final normalized = normalizeSignInCode(data?.text ?? '');
+    if (normalized == null) {
+      setState(
+        () => _clipboardNote =
+            'The clipboard does not hold a sign-in code. Copy the seven '
+            'characters the bot sent.',
+      );
+      return;
+    }
+    _code.text = normalized;
+    await _submit();
+  }
+
   @override
   Widget build(BuildContext context) {
     final failure = widget.services.auth.snapshot.failure;
-    return _Tile(
-      icon: Icons.login_rounded,
-      title: 'Sign in',
-      detail:
-          failure?.message ??
-          'Ask Omi for a sign-in code: text ${AppServices.messagingNumber()}, '
-              'or message ${AppServices.telegramHandle()} on Telegram, and say '
-              '"send me a sign-in code".',
-      // A phone is far narrower than the settings window, and this row already
-      // spends its width on an icon and two lines of prose. Holding the field
-      // at its desktop width there overflows the row instead of wrapping.
-      trailing: SizedBox(
-        width: MediaQuery.sizeOf(context).width < 520 ? 150 : 220,
-        child: Row(
-          children: [
-            Expanded(
-              child: TextField(
-                key: const Key('settings_sign_in_code'),
-                controller: _code,
-                autocorrect: false,
-                enableSuggestions: false,
-                enabled: !_busy,
-                textInputAction: TextInputAction.done,
-                decoration: const InputDecoration(
-                  isDense: true,
-                  hintText: 'ab12cd3',
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Tile(
+          icon: Icons.login_rounded,
+          title: 'Sign in',
+          detail:
+              _clipboardNote ??
+              failure?.message ??
+              'Ask Omi for a sign-in code, then paste it here or type it in.',
+          // A phone is far narrower than the settings window, and this row
+          // already spends its width on an icon and two lines of prose.
+          // Holding the field at its desktop width there overflows the row
+          // instead of wrapping.
+          trailing: SizedBox(
+            width: MediaQuery.sizeOf(context).width < 520 ? 176 : 250,
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    key: const Key('settings_sign_in_code'),
+                    controller: _code,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    enabled: !_busy,
+                    textCapitalization: TextCapitalization.characters,
+                    textInputAction: TextInputAction.done,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      hintText: signInCodeExample,
+                    ),
+                    onSubmitted: _busy ? null : (_) => unawaited(_submit()),
+                  ),
                 ),
-                onSubmitted: _busy ? null : (_) => unawaited(_submit()),
-              ),
+                IconButton(
+                  key: const Key('settings_sign_in_paste'),
+                  tooltip: 'Paste code',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.content_paste_rounded, size: 16),
+                  onPressed: _busy ? null : () => unawaited(_paste()),
+                ),
+                TextButton(
+                  key: const Key('settings_sign_in'),
+                  onPressed: _busy ? null : () => unawaited(_submit()),
+                  child: const Text('Sign in'),
+                ),
+              ],
             ),
-            const SizedBox(width: 8),
-            TextButton(
-              key: const Key('settings_sign_in'),
-              onPressed: _busy ? null : () => unawaited(_submit()),
-              child: const Text('Sign in'),
-            ),
-          ],
+          ),
         ),
+        _GetSignInCodeRow(busy: _busy),
+      ],
+    );
+  }
+}
+
+/// The other half of signing in: getting a code at all. Asking the bot is a
+/// step outside the app, so it is offered as the two places Omi answers rather
+/// than described in prose the user has to act out themselves.
+class _GetSignInCodeRow extends StatelessWidget {
+  const _GetSignInCodeRow({required this.busy});
+
+  final bool busy;
+
+  static Uri _messagingUri() => Uri.parse(
+    'sms:${AppServices.messagingNumber().replaceAll(RegExp(r'[^\d+]'), '')}',
+  );
+
+  static Uri _telegramUri() => Uri.parse(
+    'https://t.me/${AppServices.telegramHandle().replaceAll('@', '')}',
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _SettingsColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(44, 0, 14, 10),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            'No code yet? Ask Omi on ',
+            style: TextStyle(fontSize: 12, color: colors.muted),
+          ),
+          TextButton(
+            key: const Key('settings_sign_in_ask_imessage'),
+            onPressed: busy
+                ? null
+                : () => unawaited(
+                    launchUrl(
+                      _messagingUri(),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                  ),
+            child: const Text('iMessage'),
+          ),
+          TextButton(
+            key: const Key('settings_sign_in_ask_telegram'),
+            onPressed: busy
+                ? null
+                : () => unawaited(
+                    launchUrl(
+                      _telegramUri(),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                  ),
+            child: const Text('Telegram'),
+          ),
+        ],
       ),
     );
   }

@@ -153,10 +153,19 @@ final class AuthController extends ChangeNotifier {
         const AuthSnapshot(phase: AuthPhase.signedOut, consentGranted: false),
       );
     } else {
+      // The gateway announces the session the moment it mints one, so this
+      // runs alongside whichever call asked for it. Its receipt read can start
+      // before that call records consent and land after, and applying a stale
+      // null here put the app back to "signed in, but not properly" a beat
+      // after a sign-in that worked. A receipt already held for this same
+      // subject is never older than the read that missed it.
+      final stored = await _receiptFor(session.uid);
+      final held = _snapshot.processingConsent;
       _authenticated(
         session,
         consentGranted: true,
-        processingConsent: await _receiptFor(session.uid),
+        processingConsent:
+            stored ?? (held?.authorizes(session.uid) == true ? held : null),
       );
     }
   }

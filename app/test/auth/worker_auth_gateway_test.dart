@@ -71,10 +71,10 @@ void main() {
       return http.Response(credentials(), 200);
     }, store: store);
 
-    final session = await gateway.signInWithChannelCode(' ab12cd3 ');
+    final session = await gateway.signInWithChannelCode(' k7rm4qp ');
 
     expect(seen.url.path, '/v1/auth/channel/exchange');
-    expect(jsonDecode(seen.body), {'code': 'ab12cd3'});
+    expect(jsonDecode(seen.body), {'code': 'K7RM4QP'});
     expect(session.uid, 'u1');
     expect(session.idToken, 'access-token');
     expect(session.expiresAt, DateTime.fromMillisecondsSinceEpoch(2000));
@@ -84,6 +84,21 @@ void main() {
     expect(gateway.currentSession?.uid, 'u1');
   });
 
+  test(
+    'a code pasted with the punctuation around it is still redeemed',
+    () async {
+      late http.Request seen;
+      final gateway = gatewayFor((request) async {
+        seen = request;
+        return http.Response(credentials(), 200);
+      });
+
+      await gateway.signInWithChannelCode('  k7rm-4qp.  ');
+
+      expect(jsonDecode(seen.body), {'code': 'K7RM4QP'});
+    },
+  );
+
   test('a code that cannot be one of ours never reaches the worker', () async {
     var called = false;
     final gateway = gatewayFor((request) async {
@@ -91,7 +106,14 @@ void main() {
       return http.Response(credentials(), 200);
     });
 
-    for (final bad in ['', 'short', 'waytoolongcode', 'ab-12cd']) {
+    for (final bad in [
+      '',
+      'short',
+      'waytoolongcode',
+      'ab-12cd',
+      'K7RM4Q0',
+      'K7RM4QI',
+    ]) {
       await expectLater(
         gateway.signInWithChannelCode(bad),
         throwsA(
@@ -112,7 +134,7 @@ void main() {
       final gateway = gatewayFor((request) async => http.Response('{}', 401));
 
       await expectLater(
-        gateway.signInWithChannelCode('ab12cd3'),
+        gateway.signInWithChannelCode('K7RM4QP'),
         throwsA(
           isA<AuthOperationException>().having(
             (error) => error.failure.code,
@@ -128,7 +150,7 @@ void main() {
     final gateway = gatewayFor((request) async => http.Response('{}', 429));
 
     await expectLater(
-      gateway.signInWithChannelCode('ab12cd3'),
+      gateway.signInWithChannelCode('K7RM4QP'),
       throwsA(
         isA<AuthOperationException>().having(
           (error) => error.failure.code,
@@ -162,7 +184,7 @@ void main() {
       store: _BrokenStore(onWrite: true),
     );
 
-    final session = await gateway.signInWithChannelCode('ab12cd3');
+    final session = await gateway.signInWithChannelCode('K7RM4QP');
 
     expect(session.uid, 'u1');
     expect(gateway.currentSession?.uid, 'u1');
@@ -175,7 +197,7 @@ void main() {
       store: _MemoryStore(),
     );
 
-    await gateway.signInWithChannelCode('ab12cd3');
+    await gateway.signInWithChannelCode('K7RM4QP');
 
     expect(gateway.credentialPersistenceFailure, isNull);
   });
@@ -197,7 +219,7 @@ void main() {
       (request) async => http.Response(credentials(), 200),
       store: store,
     );
-    await signIn.signInWithChannelCode('ab12cd3');
+    await signIn.signInWithChannelCode('K7RM4QP');
 
     final relaunch = gatewayFor(
       (request) async => http.Response(credentials(uid: 'u1'), 200),
@@ -242,7 +264,7 @@ void main() {
       );
     }, now: () => now);
 
-    await gateway.signInWithChannelCode('ab12cd3');
+    await gateway.signInWithChannelCode('K7RM4QP');
     expect(requests, 1);
 
     await gateway.refreshSession();
@@ -268,7 +290,7 @@ void main() {
         return http.Response(credentials(), 200);
       }, store: store);
 
-      await gateway.signInWithChannelCode('ab12cd3');
+      await gateway.signInWithChannelCode('K7RM4QP');
       await gateway.signOut();
 
       expect(attempts, 2);
@@ -285,7 +307,7 @@ void main() {
     );
 
     await expectLater(
-      gateway.signInWithChannelCode('ab12cd3'),
+      gateway.signInWithChannelCode('K7RM4QP'),
       throwsA(isA<AuthOperationException>()),
     );
     expect(store.value, isNull);

@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import 'auth_gateway.dart';
 import 'auth_models.dart';
+import 'sign_in_code.dart';
 
 /// Where the refresh credential lives between launches.
 ///
@@ -88,10 +89,6 @@ final class WorkerAuthGateway
 
   @override
   String? get credentialPersistenceFailure => _credentialPersistenceFailure;
-
-  /// A code that is plausibly one of ours. The Worker normalises and checks it
-  /// properly; this only avoids spending an attempt on an obvious typo.
-  static final _codePattern = RegExp(r'^[0-9A-Za-z]{7}$');
 
   /// How long the stored credential is waited for before launch proceeds
   /// without it.
@@ -182,13 +179,17 @@ final class WorkerAuthGateway
   /// Async so that a rejected code arrives as a failed future like every other
   /// refusal, rather than throwing under the caller before it has one.
   Future<AuthSession> signInWithChannelCode(String code) async {
-    final trimmed = code.trim();
-    if (!_codePattern.hasMatch(trimmed)) {
+    final normalized = normalizeSignInCode(code);
+    if (normalized == null) {
       throw const AuthOperationException(
-        AuthFailure(AuthErrorCode.invalidOtp, 'That code does not look right.'),
+        AuthFailure(
+          AuthErrorCode.invalidOtp,
+          'That is not a sign-in code. It is seven characters, and the bot '
+          'sends it on its own line.',
+        ),
       );
     }
-    return await _exchange('/v1/auth/channel/exchange', {'code': trimmed});
+    return await _exchange('/v1/auth/channel/exchange', {'code': normalized});
   }
 
   @override
