@@ -41,6 +41,10 @@ pub mod rewind;
 mod runtime;
 mod runtime_capture;
 mod scan;
+// Captioning reads the Rewind timeline, so it exists exactly where Rewind
+// does. Left ungated it broke the iOS build outright, on an import of a module
+// that platform never has.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod screen_caption;
 mod security;
 mod self_improve;
