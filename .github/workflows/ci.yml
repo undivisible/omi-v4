@@ -18,6 +18,7 @@ concurrency:
 jobs:
   flutter:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: app
@@ -31,6 +32,10 @@ jobs:
         with:
           channel: stable
           cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/native/hub -> target
+          shared-key: flutter-rinf
       # crepuscularity_flutter (the currents renderer) is pinned in app/pubspec.yaml
       # to a public GitHub ref, so `flutter pub get` resolves it without a sibling
       # checkout. Once the package is published to pub.dev, pin it via the crepus
@@ -48,6 +53,7 @@ jobs:
 
   flutter-apple-aot:
     runs-on: macos-latest
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: app
@@ -70,6 +76,7 @@ jobs:
 
   flutter-windows-aot:
     runs-on: windows-latest
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: app
@@ -85,11 +92,20 @@ jobs:
 
   worker-rs:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: worker-rs
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Checkout moonshine beside the repo
+        working-directory: .
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/tschk/moonshine.git "$GITHUB_WORKSPACE/../moonshine"
+          cd "$GITHUB_WORKSPACE/../moonshine"
+          bun install --frozen-lockfile
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -98,19 +114,24 @@ jobs:
         with:
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
-      - uses: oven-sh/setup-bun@v2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: worker-rs -> target
+          shared-key: worker-rs
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
       - run: cargo test --lib
+      - run: bun run test:tail
       - run: cargo install worker-build --version 0.8.5 --locked
       - name: Typecheck and test moonshine site
         working-directory: site/web-moonshine
-        run: bun install && bunx tsc --noEmit && bun test
+        run: bun install --frozen-lockfile && bunx tsc --noEmit && bun test
       - run: bun run deploy:dry-run
 
   rust:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: app/native/hub
@@ -119,6 +140,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/native/hub -> target
+          shared-key: hub
       - run: cargo fmt --check
       - run: bash ../../tool/check_native_target_dependencies.sh
       - run: cargo clippy --all-targets --all-features -- -D warnings
@@ -127,6 +152,7 @@ jobs:
 
   hub-macos:
     runs-on: macos-latest
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: app/native/hub
@@ -135,6 +161,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/native/hub -> target
+          shared-key: hub-macos
       - name: Hub quality + computer-use probe
         run: |
           export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macos:/usr/lib/swift"

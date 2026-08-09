@@ -85,7 +85,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             app/native/hub/target
-          key: mobile-android-${{ runner.os }}-${{ hashFiles('app/pubspec.lock', 'app/android/**/*.gradle*', 'app/android/gradle/wrapper/gradle-wrapper.properties', 'app/native/hub/Cargo.toml') }}
+          key: mobile-android-${{ runner.os }}-${{ hashFiles('app/pubspec.lock', 'app/android/**/*.gradle*', 'app/android/gradle/wrapper/gradle-wrapper.properties', 'app/native/hub/Cargo.lock') }}
           restore-keys: |
             mobile-android-${{ runner.os }}-
 
@@ -238,7 +238,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             app/native/hub/target
-          key: mobile-ios-${{ runner.os }}-${{ hashFiles('app/pubspec.lock', 'app/ios/Podfile.lock', 'app/native/hub/Cargo.toml') }}
+          key: mobile-ios-${{ runner.os }}-${{ hashFiles('app/pubspec.lock', 'app/ios/Podfile.lock', 'app/native/hub/Cargo.lock') }}
           restore-keys: |
             mobile-ios-${{ runner.os }}-
 

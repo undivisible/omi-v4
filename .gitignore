@@ -18,8 +18,8 @@ firmware/test/prj.conf
 firmware/v2.9.0/
 firmware/v3.4.0/
 firmware/omi/build-rust-zephyr/
-worker/.cache/
-worker/.dev.vars
+worker-rs/.cache/
+worker-rs/.dev.vars
 
 # Local agent / IDE scratch (not part of the product).
 .claude/

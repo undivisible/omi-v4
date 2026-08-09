@@ -89,9 +89,9 @@ describe("page components", () => {
     expect(home).toContain('class="field"');
     expect(home).toContain("data-omi-mark");
     expect(home).toContain("omi-mark");
-    expect(home).toContain('class="rail"');
+    expect(home).toContain("omi-mark--rail");
     expect(home).toContain("btn-solid");
-    expect(home).toContain("reveal");
+    expect(home).toContain("data-reveal");
   });
 
   test("home page contains images", () => {

@@ -238,7 +238,7 @@ jobs:
             ~/.rustup/toolchains
             ~/.cargo/registry
             ~/.cargo/git
-          key: rust-fw-${{ env.RUST_TARGET }}-${{ hashFiles('firmware/omi/rust/Cargo.toml') }}
+          key: rust-fw-${{ env.RUST_TARGET }}-${{ hashFiles('firmware/omi/rust/Cargo.lock') }}
           restore-keys: |
             rust-fw-${{ env.RUST_TARGET }}-
 
@@ -380,7 +380,7 @@ jobs:
             ~/.rustup/toolchains
             ~/.cargo/registry
             ~/.cargo/git
-          key: rust-fw-host-${{ hashFiles('firmware/omi/rust/Cargo.toml') }}
+          key: rust-fw-host-${{ hashFiles('firmware/omi/rust/Cargo.lock') }}
           restore-keys: |
             rust-fw-host-
 
@@ -450,7 +450,7 @@ jobs:
             ~/.rustup/toolchains
             ~/.cargo/registry
             ~/.cargo/git
-          key: rust-fw-bsim-${{ env.BSIM_RUST_TARGET }}-${{ hashFiles('firmware/omi/rust/Cargo.toml') }}
+          key: rust-fw-bsim-${{ env.BSIM_RUST_TARGET }}-${{ hashFiles('firmware/omi/rust/Cargo.lock') }}
           restore-keys: |
             rust-fw-bsim-${{ env.BSIM_RUST_TARGET }}-
 

@@ -76,7 +76,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             app/native/hub/target
-          key: desktop-macos-${{ runner.os }}-${{ hashFiles('app/pubspec.lock', 'app/macos/Podfile.lock', 'app/native/hub/Cargo.toml') }}
+          key: desktop-macos-${{ runner.os }}-${{ hashFiles('app/pubspec.lock', 'app/macos/Podfile.lock', 'app/native/hub/Cargo.lock') }}
           restore-keys: |
             desktop-macos-${{ runner.os }}-
 

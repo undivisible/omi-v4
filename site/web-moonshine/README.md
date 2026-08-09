@@ -37,7 +37,7 @@ bun test             # run the test suite
 bunx tsc --noEmit    # type-check
 ```
 
-The moonshine packages are pulled from `../../moonshine/packages/*` via
+The moonshine packages are pulled from `../../../moonshine/packages/*` via
 `file:` dependencies, so the `moonshine` checkout must sit beside `omi-v4`
 under the same parent directory.
 
