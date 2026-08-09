@@ -1,0 +1,14 @@
+/*.css
+  Cache-Control: public, max-age=604800
+
+/*.js
+  Cache-Control: public, max-age=604800
+
+/*.woff2
+  Cache-Control: public, max-age=2592000
+
+/*.ttf
+  Cache-Control: public, max-age=2592000
+
+/*.webp
+  Cache-Control: public, max-age=604800

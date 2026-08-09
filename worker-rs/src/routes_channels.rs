@@ -1803,7 +1803,7 @@ pub async fn deliver_due_channel_messages(env: &Env) -> Result<()> {
     let db = env.d1("DB")?;
     let orphans = db
         .prepare(
-            "SELECT DISTINCT d.uid, d.channel FROM channel_deliveries d\n     WHERE d.state NOT IN ('sent', 'cancelled') AND NOT EXISTS (\n       SELECT 1 FROM channel_bindings b\n       WHERE b.uid = d.uid AND b.channel = d.channel\n         AND b.revoked_at IS NULL\n         AND COALESCE(b.channel_chat_id, b.channel_user_id) = d.channel_chat_id\n     )",
+            "SELECT DISTINCT d.uid, d.channel FROM channel_deliveries d\n     WHERE d.state NOT IN ('sent', 'cancelled') AND NOT EXISTS (\n       SELECT 1 FROM channel_bindings b\n       WHERE b.uid = d.uid AND b.channel = d.channel\n         AND b.revoked_at IS NULL\n         AND COALESCE(b.channel_chat_id, b.channel_user_id) = d.channel_chat_id\n     ) LIMIT 25",
         )
         .all()
         .await?;
