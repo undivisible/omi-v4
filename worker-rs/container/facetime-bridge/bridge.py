@@ -15,6 +15,7 @@ import base64
 import json
 import logging
 import os
+import secrets
 import signal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
@@ -322,7 +323,23 @@ class ControlHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _authorized(self) -> bool:
+        expected = _env("CONTROL_TOKEN")
+        if not expected:
+            return False
+        auth = self.headers.get("Authorization") or ""
+        if auth.startswith("Bearer "):
+            provided = auth[7:].strip()
+        else:
+            provided = (self.headers.get("X-Control-Token") or "").strip()
+        if not provided or len(provided) != len(expected):
+            return False
+        return secrets.compare_digest(provided, expected)
+
     def do_POST(self) -> None:  # noqa: N802 - stdlib signature
+        if not self._authorized():
+            self._respond(401, {"error": "unauthorized"})
+            return
         length = int(self.headers.get("content-length") or 0)
         if length > 4096:
             self._respond(413, {"error": "too large"})
@@ -339,6 +356,9 @@ class ControlHandler(BaseHTTPRequestHandler):
 
 
 async def main() -> None:
+    if not _env("CONTROL_TOKEN"):
+        raise SystemExit("CONTROL_TOKEN is required")
+
     loop = asyncio.get_running_loop()
     bridge = Bridge()
     started = asyncio.Event()
@@ -347,7 +367,8 @@ async def main() -> None:
     ControlHandler.bridge = bridge
     ControlHandler.bridge_started = started
 
-    server = ThreadingHTTPServer(("0.0.0.0", CONTROL_PORT), ControlHandler)
+    bind_host = _env("CONTROL_BIND_HOST", "0.0.0.0")
+    server = ThreadingHTTPServer((bind_host, CONTROL_PORT), ControlHandler)
     Thread(target=server.serve_forever, daemon=True).start()
 
     for sig in (signal.SIGINT, signal.SIGTERM):

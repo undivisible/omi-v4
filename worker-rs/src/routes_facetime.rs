@@ -419,6 +419,8 @@ impl FaceTimeBridge {
         );
         options.add_env("MAX_SESSION_SECONDS", &max_session_seconds.to_string());
         options.add_env("SESSION_ID", &start.session_id);
+        let control_token = uuid_v4();
+        options.add_env("CONTROL_TOKEN", &control_token);
         if container.start(Some(options)).is_err() {
             let _ = settle(&self.state, &self.env, "failed").await;
             return response(json!({ "error": "Bridge unavailable" }), 503);
@@ -445,6 +447,7 @@ impl FaceTimeBridge {
         init.with_method(Method::Post);
         let headers = Headers::new();
         headers.set("content-type", "application/json")?;
+        headers.set("authorization", &format!("Bearer {control_token}"))?;
         init.with_headers(headers);
         init.with_body(Some(JsValue::from_str(
             &json!({ "handle": start.handle }).to_string(),
