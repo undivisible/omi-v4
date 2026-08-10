@@ -9,6 +9,7 @@
 //! converges identically; only the response-latency profile differs.
 
 use base64::Engine as _;
+use futures_util::future::join;
 use serde_json::{json, Value};
 use worker::wasm_bindgen::{JsCast, JsValue};
 use worker::wasm_bindgen_futures::JsFuture;
@@ -549,8 +550,13 @@ async fn search_memory_claims_by_vector(
 /// the TS `try/catch → null` contract so callers degrade gracefully.
 pub async fn memory_context_for(env: &Env, uid: &str, query: &str) -> Option<String> {
     let db = env.d1("DB").ok()?;
-    let profiles = list_profile_memories(&db, uid, 24).await.ok()?;
-    let items = search_memory_claims(env, uid, query, 8).await.ok()?;
+    let (profiles_result, items_result) = join(
+        list_profile_memories(&db, uid, 24),
+        search_memory_claims(env, uid, query, 8),
+    )
+    .await;
+    let profiles = profiles_result.ok()?;
+    let items = items_result.ok()?;
     let contents: Vec<String> = items
         .iter()
         .map(|item| str_field(item, "content"))

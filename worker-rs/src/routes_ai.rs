@@ -14,7 +14,7 @@ use std::{
 };
 
 use base64::Engine;
-use futures_util::{stream, StreamExt};
+use futures_util::{future::join, stream, StreamExt};
 use serde_json::{json, Value};
 use worker::wasm_bindgen;
 use worker::wasm_bindgen::JsValue;
@@ -704,11 +704,7 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
 
     let request_id = uuid_v4();
     let now = now_ms();
-    let input_characters: i64 = parsed
-        .messages
-        .iter()
-        .map(|m| m.content.encode_utf16().count() as i64)
-        .sum();
+    let input_characters = parsed.input_characters as i64;
     let estimated_input_tokens = managed_ai::input_token_reservation(&parsed.messages);
     let estimated_cost = managed_ai::cost_for(
         estimated_input_tokens,
@@ -826,7 +822,12 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
         return error_json("Managed AI unavailable", 502);
     }
 
-    mark_streaming(&ctx, &request_id, upstream_status as i64).await;
+    let mark_env = ctx.env.clone();
+    let mark_request_id = request_id.clone();
+    let mark_upstream_status = upstream_status as i64;
+    wasm_bindgen_futures::spawn_local(async move {
+        mark_streaming_env(&mark_env, &mark_request_id, mark_upstream_status).await;
+    });
 
     let upstream_stream = upstream.stream()?;
     let usage_tail = Rc::new(RefCell::new(managed_ai::UsageTail::default()));
@@ -852,28 +853,29 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
             let (input_tokens, output_tokens) = usage_tail.borrow().usage();
             if let Ok(stub) = assistant_admission_stub(&final_env) {
                 let status = if failed.get() { "error" } else { "ok" };
-                settle_managed_inbox(
-                    &final_env,
-                    &stub,
-                    &final_request_id,
-                    if failed.get() { "failed" } else { "complete" },
-                    input_tokens,
-                    output_tokens,
-                    Some(upstream_status as i64),
-                    input_price,
-                    output_price,
-                )
-                .await;
-                send_foglamp_trace(
-                    &final_env,
-                    &final_request_id,
-                    "managed-chat-completion",
-                    &final_provider,
-                    &final_model,
-                    now,
-                    status,
-                    input_tokens,
-                    output_tokens,
+                join(
+                    settle_managed_inbox(
+                        &final_env,
+                        &stub,
+                        &final_request_id,
+                        if failed.get() { "failed" } else { "complete" },
+                        input_tokens,
+                        output_tokens,
+                        Some(upstream_status as i64),
+                        input_price,
+                        output_price,
+                    ),
+                    send_foglamp_trace(
+                        &final_env,
+                        &final_request_id,
+                        "managed-chat-completion",
+                        &final_provider,
+                        &final_model,
+                        now,
+                        status,
+                        input_tokens,
+                        output_tokens,
+                    ),
                 )
                 .await;
             }
@@ -897,8 +899,8 @@ async fn release_assistant(stub: &Stub, request_id: &str) {
     .await;
 }
 
-async fn mark_streaming(ctx: &RouteContext<()>, request_id: &str, upstream_status: i64) {
-    let Ok(db) = ctx.env.d1("DB") else { return };
+async fn mark_streaming_env(env: &Env, request_id: &str, upstream_status: i64) {
+    let Ok(db) = env.d1("DB") else { return };
     let now = now_ms();
     if let Ok(statement) = db
         .prepare("UPDATE managed_ai_requests SET status = 'streaming', upstream_status = ?1, updated_at = ?2 WHERE id = ?3")

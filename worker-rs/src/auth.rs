@@ -116,38 +116,62 @@ pub fn claims_valid(parsed: &ParsedToken, project_id: &str, now: i64) -> bool {
     true
 }
 
+fn verifying_key_from_jwk(jwk: &FirebaseJwk) -> Option<VerifyingKey<Sha256>> {
+    let (Some(n_b64), Some(e_b64)) = (jwk.n.as_deref(), jwk.e.as_deref()) else {
+        return None;
+    };
+    let n_bytes = decode_segment(n_b64)?;
+    let e_bytes = decode_segment(e_b64)?;
+    let n = BigUint::from_bytes_be(&n_bytes);
+    let e = BigUint::from_bytes_be(&e_bytes);
+    let public_key = RsaPublicKey::new(n, e).ok()?;
+    Some(VerifyingKey::new(public_key))
+}
+
+pub struct PreparedFirebaseJwk {
+    pub kid: Option<String>,
+    verifying_key: VerifyingKey<Sha256>,
+}
+
+impl PreparedFirebaseJwk {
+    pub fn try_from_jwk(jwk: &FirebaseJwk) -> Option<Self> {
+        let verifying_key = verifying_key_from_jwk(jwk)?;
+        Some(Self {
+            kid: jwk.kid.clone(),
+            verifying_key,
+        })
+    }
+
+    pub fn verify(&self, signed: &[u8], signature: &[u8]) -> bool {
+        let Ok(sig) = Signature::try_from(signature) else {
+            return false;
+        };
+        self.verifying_key.verify(signed, &sig).is_ok()
+    }
+}
+
+pub fn prepare_jwks(jwks: &[FirebaseJwk]) -> Vec<PreparedFirebaseJwk> {
+    jwks.iter()
+        .filter_map(PreparedFirebaseJwk::try_from_jwk)
+        .collect()
+}
+
 /// Verify the RS256 signature against a JWK (modulus `n`, exponent `e`, both
 /// base64url). Returns false on any decode/parse/verification failure.
 pub fn verify_rs256(jwk: &FirebaseJwk, signed: &[u8], signature: &[u8]) -> bool {
-    let (Some(n_b64), Some(e_b64)) = (jwk.n.as_deref(), jwk.e.as_deref()) else {
-        return false;
-    };
-    let Some(n_bytes) = decode_segment(n_b64) else {
-        return false;
-    };
-    let Some(e_bytes) = decode_segment(e_b64) else {
-        return false;
-    };
-    let n = BigUint::from_bytes_be(&n_bytes);
-    let e = BigUint::from_bytes_be(&e_bytes);
-    let Ok(public_key) = RsaPublicKey::new(n, e) else {
-        return false;
-    };
-    let verifying_key: VerifyingKey<Sha256> = VerifyingKey::new(public_key);
-    let Ok(sig) = Signature::try_from(signature) else {
-        return false;
-    };
-    verifying_key.verify(signed, &sig).is_ok()
+    PreparedFirebaseJwk::try_from_jwk(jwk)
+        .map(|prepared| prepared.verify(signed, signature))
+        .unwrap_or(false)
 }
 
 /// End-to-end token verification given the already-fetched JWKS. Returns the
 /// authenticated identity or `None`. The JWKS fetch/cache lives in the worker
 /// glue; this stays pure for `cargo test`.
-pub fn verify_firebase_token(
+pub fn verify_firebase_token_prepared(
     token: &str,
     project_id: &str,
     now: i64,
-    jwks: &[FirebaseJwk],
+    jwks: &[PreparedFirebaseJwk],
 ) -> Option<Auth> {
     let parsed = parse_token(token)?;
     if !claims_valid(&parsed, project_id, now) {
@@ -157,7 +181,7 @@ pub fn verify_firebase_token(
     let jwk = jwks
         .iter()
         .find(|candidate| candidate.kid.as_deref() == Some(kid))?;
-    if !verify_rs256(jwk, &parsed.signed, &parsed.signature) {
+    if !jwk.verify(&parsed.signed, &parsed.signature) {
         return None;
     }
     let sub = parsed.claims.sub.clone()?;
@@ -165,6 +189,15 @@ pub fn verify_firebase_token(
         uid: sub,
         email: parsed.claims.email.clone(),
     })
+}
+
+pub fn verify_firebase_token(
+    token: &str,
+    project_id: &str,
+    now: i64,
+    jwks: &[FirebaseJwk],
+) -> Option<Auth> {
+    verify_firebase_token_prepared(token, project_id, now, &prepare_jwks(jwks))
 }
 
 /// Verify a Worker-issued access token and express it through the same identity
@@ -432,5 +465,76 @@ mod tests {
         );
         assert_eq!(cache_max_age("no-cache"), 300);
         assert_eq!(cache_max_age(""), 300);
+    }
+
+    #[test]
+    fn prepared_token_verification_matches_raw_path() {
+        let key = make_key();
+        let jwk = jwk_from(&key, "kid-1");
+        let prepared = prepare_jwks(std::slice::from_ref(&jwk));
+        let now = 1_700_000_000i64;
+        let claims = format!(
+            r#"{{"aud":"{PROJECT}","iss":"https://securetoken.google.com/{PROJECT}","sub":"user-abc","email":"u@x.com","exp":{},"iat":{}}}"#,
+            now + 3600,
+            now - 10
+        );
+        let token = sign_token(&key, r#"{"alg":"RS256","kid":"kid-1"}"#, &claims);
+
+        let raw = verify_firebase_token(&token, PROJECT, now, std::slice::from_ref(&jwk)).expect("raw valid");
+        let prep =
+            verify_firebase_token_prepared(&token, PROJECT, now, &prepared).expect("prepared valid");
+        assert_eq!(raw, prep);
+
+        let bad_claims = format!(
+            r#"{{"aud":"other","iss":"https://securetoken.google.com/{PROJECT}","sub":"u","exp":{},"iat":{}}}"#,
+            now + 3600,
+            now - 10
+        );
+        let bad_token = sign_token(&key, r#"{"alg":"RS256","kid":"kid-1"}"#, &bad_claims);
+        assert!(verify_firebase_token(&bad_token, PROJECT, now, std::slice::from_ref(&jwk)).is_none());
+        assert!(verify_firebase_token_prepared(&bad_token, PROJECT, now, &prepared).is_none());
+    }
+
+    #[test]
+    fn prepared_verification_timing_evidence() {
+        use std::time::Instant;
+
+        let key = make_key();
+        let jwk = jwk_from(&key, "kid-1");
+        let prepared = prepare_jwks(std::slice::from_ref(&jwk));
+        let now = 1_700_000_000i64;
+        let claims = format!(
+            r#"{{"aud":"{PROJECT}","iss":"https://securetoken.google.com/{PROJECT}","sub":"user-abc","email":"u@x.com","exp":{},"iat":{}}}"#,
+            now + 3600,
+            now - 10
+        );
+        let token = sign_token(&key, r#"{"alg":"RS256","kid":"kid-1"}"#, &claims);
+        let parsed = parse_token(&token).expect("parsed");
+
+        const ITERATIONS: u32 = 250;
+        let prepared_start = Instant::now();
+        for _ in 0..ITERATIONS {
+            assert!(prepared[0].verify(&parsed.signed, &parsed.signature));
+        }
+        let prepared_elapsed = prepared_start.elapsed();
+
+        let rebuild_start = Instant::now();
+        for _ in 0..ITERATIONS {
+            assert!(verify_rs256(&jwk, &parsed.signed, &parsed.signature));
+        }
+        let rebuild_elapsed = rebuild_start.elapsed();
+
+        eprintln!(
+            "prepared_jwk_verify: {:?} over {ITERATIONS} iterations (avg {:?})",
+            prepared_elapsed,
+            prepared_elapsed / ITERATIONS
+        );
+        eprintln!(
+            "rebuild_rs256_verify: {:?} over {ITERATIONS} iterations (avg {:?})",
+            rebuild_elapsed,
+            rebuild_elapsed / ITERATIONS
+        );
+        let ratio = prepared_elapsed.as_nanos() as f64 / rebuild_elapsed.as_nanos().max(1) as f64;
+        eprintln!("prepared/rebuild ratio: {ratio:.3}");
     }
 }

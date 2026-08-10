@@ -3,6 +3,8 @@
 //! `worker/src/index.ts` + the ported handlers in `worker/src/routes.ts`.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 use worker::wasm_bindgen::JsValue;
@@ -31,7 +33,8 @@ pub(crate) const RECEIPT_CLAIM_AUTH_MARKER: &str = "__receipt_claim__";
 thread_local! {
     // Per-isolate JWKS cache: (expires_at_ms, keys). Mirrors the module-level
     // `keys` cache in auth.ts.
-    static JWKS_CACHE: RefCell<Option<(f64, Vec<auth::FirebaseJwk>)>> = const { RefCell::new(None) };
+    static JWKS_CACHE: RefCell<Option<(f64, Arc<Vec<auth::PreparedFirebaseJwk>>)>> = const { RefCell::new(None) };
+    static USER_UPSERT_DEBOUNCE: RefCell<HashMap<String, (Option<String>, f64)>> = RefCell::new(HashMap::new());
 }
 
 #[event(start)]
@@ -60,24 +63,23 @@ async fn scheduled(_event: worker::ScheduledEvent, env: Env, ctx: worker::Schedu
     {
         let _ = crate::routes_channels::deliver_due_channel_messages(&env).await;
     }
-    // --- Inbox fallback responder: reply to unclaimed inbox items ---
-    let _ = crate::routes_channels::respond_to_stale_inbox_items(&env).await;
-    // --- Managed AI: reconcile in-flight/streaming assistant requests ---
-    // The one branch the TS does not wrap in `.catch(() => undefined)`, so it is
-    // the only one whose failure rejects the batch and suppresses the heartbeat
-    // below. Preserved as-is: that asymmetry is what the monitor is watching.
-    let batch = crate::routes_ai::reconcile_managed_assistant_requests(&env).await;
+    let (_inbox, batch, _stripe, _memory) = futures_util::future::join4(
+        async {
+            let _ = crate::routes_channels::respond_to_stale_inbox_items(&env).await;
+        },
+        crate::routes_ai::reconcile_managed_assistant_requests(&env),
+        async {
+            let _ = crate::stripe_sync::reconcile_stripe_subscriptions(&env).await;
+        },
+        async {
+            crate::routes_memory::cron_slice(&env).await;
+        },
+    )
+    .await;
     let batch_resolved = batch.is_ok();
     if let Err(error) = batch {
         ctx.wait_until(capture_exception(env.clone(), error.to_string()));
     }
-    // --- Stripe: reconcile subscriptions a webhook never arrived for ---
-    // A Stripe webhook that never arrives would otherwise leave a paying
-    // customer with nothing, silently and permanently. This re-reads a bounded
-    // handful of stale subscriptions per tick.
-    let _ = crate::stripe_sync::reconcile_stripe_subscriptions(&env).await;
-    // --- Memory & Currents group: backfillClaimVectors → drainPendingEmbeddings ---
-    crate::routes_memory::cron_slice(&env).await;
     // Ping the Better Stack heartbeat only when the whole cron batch resolves; a
     // rejection skips the ping so Better Stack alerts on the missed beat. No-op
     // when BETTERSTACK_HEARTBEAT_URL is unset.
@@ -222,14 +224,14 @@ pub(crate) fn error_json(message: &str, status: u16) -> Result<Response> {
 
 /// Fetch the Firebase JWKS, honouring the per-isolate cache and Cache-Control
 /// max-age (parity with `firebaseKeys` in auth.ts).
-async fn firebase_keys() -> Result<Vec<auth::FirebaseJwk>> {
+async fn firebase_keys() -> Result<Arc<Vec<auth::PreparedFirebaseJwk>>> {
     let now = Date::now().as_millis() as f64;
     if let Some(keys) = JWKS_CACHE.with(|cache| {
         cache
             .borrow()
             .as_ref()
             .filter(|(expires_at, _)| *expires_at > now)
-            .map(|(_, values)| values.clone())
+            .map(|(_, values)| Arc::clone(values))
     }) {
         return Ok(keys);
     }
@@ -248,11 +250,30 @@ async fn firebase_keys() -> Result<Vec<auth::FirebaseJwk>> {
         .unwrap_or(300);
     let body: FirebaseJwks = response.json().await?;
     let expires_at = now + (max_age as f64) * 1000.0;
-    let keys = body.keys;
+    let keys = Arc::new(auth::prepare_jwks(&body.keys));
     JWKS_CACHE.with(|cache| {
-        *cache.borrow_mut() = Some((expires_at, keys.clone()));
+        *cache.borrow_mut() = Some((expires_at, Arc::clone(&keys)));
     });
     Ok(keys)
+}
+
+fn should_skip_user_upsert(uid: &str, email: &Option<String>, now_ms: f64) -> bool {
+    USER_UPSERT_DEBOUNCE.with(|cache| {
+        cache
+            .borrow()
+            .get(uid)
+            .is_some_and(|(cached_email, last_ms)| {
+                cached_email == email && now_ms - last_ms < 60_000.0
+            })
+    })
+}
+
+fn record_user_upsert(uid: &str, email: &Option<String>, now_ms: f64) {
+    USER_UPSERT_DEBOUNCE.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert(uid.to_string(), (email.clone(), now_ms));
+    });
 }
 
 /// Result of the auth middleware: an authenticated identity, or a Response to
@@ -330,7 +351,8 @@ pub(crate) async fn authenticate_firebase_bearer(
         Err(_) => return reject("Authentication unavailable", 503),
     };
     let now = (Date::now().as_millis() / 1000) as i64;
-    let Some(identity) = auth::verify_firebase_token(token, &project_id, now, &keys) else {
+    let Some(identity) = auth::verify_firebase_token_prepared(token, &project_id, now, &keys)
+    else {
         return reject("Authentication failed", 401);
     };
 
@@ -340,24 +362,27 @@ pub(crate) async fn authenticate_firebase_bearer(
         Err(_) => return reject("Authentication unavailable", 503),
     };
     let now_ms = Date::now().as_millis() as f64;
-    let statement = db
-        .prepare(
-            "INSERT INTO users (uid, email, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)\n             ON CONFLICT(uid) DO UPDATE SET email = excluded.email, updated_at = excluded.updated_at",
-        )
-        .bind(&[
-            identity.uid.clone().into(),
-            match &identity.email {
-                Some(email) => email.clone().into(),
-                None => JsValue::NULL,
-            },
-            now_ms.into(),
-        ]);
-    let statement = match statement {
-        Ok(statement) => statement,
-        Err(_) => return reject("Authentication unavailable", 503),
-    };
-    if statement.run().await.is_err() {
-        return reject("Authentication unavailable", 503);
+    if !should_skip_user_upsert(&identity.uid, &identity.email, now_ms) {
+        let statement = db
+            .prepare(
+                "INSERT INTO users (uid, email, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)\n             ON CONFLICT(uid) DO UPDATE SET email = excluded.email, updated_at = excluded.updated_at",
+            )
+            .bind(&[
+                identity.uid.clone().into(),
+                match &identity.email {
+                    Some(email) => email.clone().into(),
+                    None => JsValue::NULL,
+                },
+                now_ms.into(),
+            ]);
+        let statement = match statement {
+            Ok(statement) => statement,
+            Err(_) => return reject("Authentication unavailable", 503),
+        };
+        if statement.run().await.is_err() {
+            return reject("Authentication unavailable", 503);
+        }
+        record_user_upsert(&identity.uid, &identity.email, now_ms);
     }
     AuthOutcome::Ok(identity)
 }
@@ -1922,7 +1947,9 @@ async fn handle_desktop_complete(mut req: Request, ctx: RouteContext<()>) -> Res
         Ok(keys) => keys,
         Err(_) => return error_json("Authentication service unavailable", 503),
     };
-    let Some(auth) = auth::verify_firebase_token(&token, &project_id, now_seconds(), &keys) else {
+    let Some(auth) =
+        auth::verify_firebase_token_prepared(&token, &project_id, now_seconds(), &keys)
+    else {
         return error_json("Authentication failed", 401);
     };
     let db = ctx.env.d1("DB")?;

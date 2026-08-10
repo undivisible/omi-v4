@@ -395,6 +395,7 @@ pub struct CompletionRequest {
     pub max_tokens: i64,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
+    pub input_characters: usize,
 }
 
 /// Port of `validatePinnedEndpoint`. Returns the parsed URL only when the
@@ -539,6 +540,7 @@ pub fn parse_request(body: &Value, model: &str) -> Option<CompletionRequest> {
         max_tokens,
         temperature,
         top_p,
+        input_characters,
     })
 }
 
@@ -572,43 +574,65 @@ pub fn usage_from(text: &str) -> (Option<i64>, Option<i64>) {
     let mut input_tokens = None;
     let mut output_tokens = None;
     for line in text.split('\n') {
-        if !line.starts_with("data: ") || line == "data: [DONE]" {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(&line[6..]) else {
-            continue;
-        };
-        if let Some(usage) = value.get("usage") {
-            if let Some(pt) = usage.get("prompt_tokens").and_then(Value::as_f64) {
-                if is_safe_integer(pt) && pt >= 0.0 {
-                    input_tokens = Some(pt as i64);
-                }
-            }
-            if let Some(ct) = usage.get("completion_tokens").and_then(Value::as_f64) {
-                if is_safe_integer(ct) && ct >= 0.0 {
-                    output_tokens = Some(ct as i64);
-                }
-            }
-        }
+        apply_usage_line(line, &mut input_tokens, &mut output_tokens);
     }
     (input_tokens, output_tokens)
 }
 
+fn apply_usage_line(
+    line: &str,
+    input_tokens: &mut Option<i64>,
+    output_tokens: &mut Option<i64>,
+) {
+    if !line.starts_with("data: ") || line == "data: [DONE]" {
+        return;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(&line[6..]) else {
+        return;
+    };
+    if let Some(usage) = value.get("usage") {
+        if let Some(pt) = usage.get("prompt_tokens").and_then(Value::as_f64) {
+            if is_safe_integer(pt) && pt >= 0.0 {
+                *input_tokens = Some(pt as i64);
+            }
+        }
+        if let Some(ct) = usage.get("completion_tokens").and_then(Value::as_f64) {
+            if is_safe_integer(ct) && ct >= 0.0 {
+                *output_tokens = Some(ct as i64);
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct UsageTail {
-    bytes: Vec<u8>,
+    remainder: Vec<u8>,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
 }
 
 impl UsageTail {
     pub fn push(&mut self, chunk: &[u8]) {
-        self.bytes.extend_from_slice(chunk);
-        if self.bytes.len() > 16_384 {
-            self.bytes.drain(..self.bytes.len() - 16_384);
+        self.remainder.extend_from_slice(chunk);
+        if self.remainder.len() > 16_384 {
+            self.remainder.drain(..self.remainder.len() - 16_384);
+        }
+        let mut split_at = 0usize;
+        for (index, &byte) in self.remainder.iter().enumerate() {
+            if byte == b'\n' {
+                if let Ok(line) = std::str::from_utf8(&self.remainder[split_at..index]) {
+                    apply_usage_line(line, &mut self.input_tokens, &mut self.output_tokens);
+                }
+                split_at = index + 1;
+            }
+        }
+        if split_at > 0 {
+            self.remainder.drain(..split_at);
         }
     }
 
     pub fn usage(&self) -> (Option<i64>, Option<i64>) {
-        usage_from(&String::from_utf8_lossy(&self.bytes))
+        (self.input_tokens, self.output_tokens)
     }
 }
 
@@ -810,6 +834,7 @@ mod tests {
         });
         let parsed = parse_request(&body, "xiaomi/mimo-v2.5-pro").unwrap();
         assert_eq!(parsed.max_tokens, DEFAULT_OUTPUT_TOKENS);
+        assert_eq!(parsed.input_characters, "hello".encode_utf16().count());
         let upstream = upstream_body(&parsed);
         assert_eq!(upstream["max_tokens"], json!(1024));
         assert_eq!(upstream["stream_options"]["include_usage"], json!(true));
