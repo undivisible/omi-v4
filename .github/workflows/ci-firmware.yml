@@ -95,7 +95,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: ${{ env.NCS_WORKSPACE }}
-          key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-parentfix-v1
+          key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-parentfix-${{ hashFiles('firmware/omi/rust/patches/zephyr-lang-rust-parent-disabled.patch') }}
 
       - name: Resolve the NCS toolchain on PATH
         if: steps.cache.outputs.cache-hit != 'true'
@@ -175,7 +175,7 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: ${{ env.NCS_WORKSPACE }}
-          key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-parentfix-v1
+          key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-parentfix-${{ hashFiles('firmware/omi/rust/patches/zephyr-lang-rust-parent-disabled.patch') }}
           fail-on-cache-miss: true
 
       - name: Resolve the NCS toolchain on PATH
