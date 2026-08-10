@@ -198,11 +198,7 @@ impl ChatRouter {
     }
 }
 
-fn likely_needs_tools(
-    prompt: &str,
-    origin: Option<MessageOrigin>,
-    lowered: Option<&str>,
-) -> bool {
+fn likely_needs_tools(prompt: &str, origin: Option<MessageOrigin>, lowered: Option<&str>) -> bool {
     if matches!(origin, Some(MessageOrigin::Overlay)) {
         return true;
     }

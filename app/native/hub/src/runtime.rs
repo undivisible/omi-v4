@@ -2638,7 +2638,8 @@ async fn dispatch_assistant(
         let memory_context = match memory_context {
             Some(context) => Some(context),
             None if cloud_memory_configured => {
-                match cloud_memory_context(state, &text, LOCAL_MEMORY_CONTEXT_ITEMS, cancellation).await
+                match cloud_memory_context(state, &text, LOCAL_MEMORY_CONTEXT_ITEMS, cancellation)
+                    .await
                 {
                     Ok(items) => items.map(|items| {
                         items

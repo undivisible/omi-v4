@@ -251,7 +251,9 @@ impl SttHandle {
                 Err(observed) => current = observed,
             }
         }
-        let result = sender.try_send(bytes).map_err(|_| SttError::ConnectionFailed);
+        let result = sender
+            .try_send(bytes)
+            .map_err(|_| SttError::ConnectionFailed);
         if result.is_err() {
             self.pending_audio_bytes
                 .fetch_sub(byte_len, Ordering::AcqRel);
@@ -962,8 +964,7 @@ mod tests {
             buffer.stash(vec![value, value], &pending);
         }
 
-        let replayed: Vec<Vec<u8>> =
-            std::iter::from_fn(|| buffer.frames.pop_front()).collect();
+        let replayed: Vec<Vec<u8>> = std::iter::from_fn(|| buffer.frames.pop_front()).collect();
 
         assert_eq!(
             replayed,
