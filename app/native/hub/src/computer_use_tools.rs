@@ -1,10 +1,12 @@
+use crate::approval::unix_time_ms;
 use crate::computer_use::valid_action;
 use crate::signals::{ActionProposal, ActionRisk, ComputerUseAction};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) const COMPUTER_INVOKE_TOOL: &str = "computer_invoke";
 pub(crate) const COMPUTER_SET_VALUE_TOOL: &str = "computer_set_value";
 pub(crate) const COMPUTER_USE_PROPOSAL_TTL_MS: i64 = 5 * 60 * 1_000;
+pub(crate) const INVALID_COMPUTER_USE_TOOL: &str =
+    "assistant provider returned an invalid computer-use tool call";
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,13 +40,12 @@ pub(crate) fn computer_use_proposal(
     arguments: serde_json::Value,
 ) -> Result<ActionProposal, String> {
     if !valid_computer_tool_identity(call_id, tool_name) {
-        return Err("assistant provider returned an invalid computer-use tool call".to_owned());
+        return Err(INVALID_COMPUTER_USE_TOOL.to_owned());
     }
     let (title, summary, action) = match tool_name {
         COMPUTER_INVOKE_TOOL => {
-            let args: ComputerInvokeArgs = serde_json::from_value(arguments).map_err(|_| {
-                "assistant provider returned an invalid computer-use tool call".to_owned()
-            })?;
+            let args: ComputerInvokeArgs = serde_json::from_value(arguments)
+                .map_err(|_| INVALID_COMPUTER_USE_TOOL.to_owned())?;
             let summary = format!(
                 "Invoke {}{}",
                 args.target_name,
@@ -59,16 +60,13 @@ pub(crate) fn computer_use_proposal(
                 background_only: args.background_only,
             };
             if !valid_action(&action) {
-                return Err(
-                    "assistant provider returned an invalid computer-use tool call".to_owned(),
-                );
+                return Err(INVALID_COMPUTER_USE_TOOL.to_owned());
             }
             ("Invoke interface element".to_owned(), summary, action)
         }
         COMPUTER_SET_VALUE_TOOL => {
-            let args: ComputerSetValueArgs = serde_json::from_value(arguments).map_err(|_| {
-                "assistant provider returned an invalid computer-use tool call".to_owned()
-            })?;
+            let args: ComputerSetValueArgs = serde_json::from_value(arguments)
+                .map_err(|_| INVALID_COMPUTER_USE_TOOL.to_owned())?;
             let summary = format!(
                 "Set {} to {} bytes{}",
                 args.target_name,
@@ -85,14 +83,12 @@ pub(crate) fn computer_use_proposal(
                 background_only: args.background_only,
             };
             if !valid_action(&action) {
-                return Err(
-                    "assistant provider returned an invalid computer-use tool call".to_owned(),
-                );
+                return Err(INVALID_COMPUTER_USE_TOOL.to_owned());
             }
             ("Set interface value".to_owned(), summary, action)
         }
         _ => {
-            return Err("assistant provider returned an invalid computer-use tool call".to_owned());
+            return Err(INVALID_COMPUTER_USE_TOOL.to_owned());
         }
     };
     Ok(ActionProposal {
@@ -142,14 +138,6 @@ pub(crate) fn live_tool_call_status(
             "detail": "Tool call was invalid or unsafe and was not proposed.",
         }),
     }
-}
-
-fn unix_time_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            duration.as_millis().min(i64::MAX as u128) as i64
-        })
 }
 
 #[cfg(test)]

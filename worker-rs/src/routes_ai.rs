@@ -27,7 +27,7 @@ use crate::assistant_admission::{AssistantAdmission, Limits as AssistantLimits, 
 use crate::glue::{authenticate, error_json, has_active_pro, AuthOutcome};
 use crate::rate_limit::RateLimiter;
 use crate::stt_admission::{Limits as SttLimits, SttAdmission};
-use crate::worker_util::{now_ms, secret_or_var as env_get, uuid_v4};
+use crate::worker_util::{do_post, now_ms, secret_or_var as env_get, stt_admission_stub, uuid_v4};
 use crate::{asr_logic, managed_ai, observability, stt_logic, voice_logic};
 
 const DO_STATE_KEY: &str = "state";
@@ -59,26 +59,9 @@ fn outcome_response(outcome: Outcome) -> Result<Response> {
     Ok(response)
 }
 
-/// POST a JSON payload to a Durable Object stub over its internal URL.
-async fn do_post(stub: &Stub, url: &str, payload: &Value) -> Result<Response> {
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post);
-    let headers = Headers::new();
-    headers.set("content-type", "application/json")?;
-    init.with_headers(headers);
-    init.with_body(Some(JsValue::from_str(&payload.to_string())));
-    let request = Request::new_with_init(url, &init)?;
-    stub.fetch_with_request(request).await
-}
-
 fn assistant_admission_stub(env: &Env) -> Result<Stub> {
     env.durable_object("ASSISTANT_ADMISSION")?
         .get_by_name("managed-ai-global")
-}
-
-fn stt_admission_stub(env: &Env) -> Result<Stub> {
-    env.durable_object("STT_ADMISSION")?
-        .get_by_name("managed-stt-global")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1347,7 +1330,7 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
             .run()
             .await
             .ok()
-            .map(|r| r.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0)),
+            .map(|r| crate::worker_util::changes(&r)),
         Err(_) => None,
     };
     match claimed {

@@ -5,7 +5,8 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 hub="$root/app/native/hub"
 live="${1:-}"
 
-export DYLD_FALLBACK_LIBRARY_PATH="${DYLD_FALLBACK_LIBRARY_PATH:-}:$(xcode-select -p 2>/dev/null)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macos:/usr/lib/swift"
+# shellcheck source=lib/macos-swift-dyld.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib/macos-swift-dyld.sh"
 
 echo "== computer-use unit + integration (hub) =="
 (cd "$hub" && cargo test --lib computer_use -- --nocapture)

@@ -55,18 +55,11 @@ pub fn verify_timestamped_signature(
     let expected = hmac_sha256_hex(secret, &format!("{timestamp}.{raw_body}"));
     signatures
         .iter()
-        .any(|signature| is_hex64_lower(signature) && constant_time_eq(&expected, signature))
+        .any(|signature| is_hex_lower(signature, 64) && constant_time_eq(&expected, signature))
 }
 
-fn is_hex64_lower(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-fn is_hex48_lower(value: &str) -> bool {
-    value.len() == 48
+fn is_hex_lower(value: &str, len: usize) -> bool {
+    value.len() == len
         && value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -76,7 +69,7 @@ fn is_hex48_lower(value: &str) -> bool {
 /// `^/start(?:@[A-Za-z0-9_]+)? ([a-f0-9]{48})$`; otherwise `^([a-f0-9]{48})$`.
 pub fn link_token(text: &str, telegram: bool) -> Option<String> {
     if !telegram {
-        return if is_hex48_lower(text) {
+        return if is_hex_lower(text, 48) {
             Some(text.to_string())
         } else {
             None
@@ -98,7 +91,7 @@ pub fn link_token(text: &str, telegram: bool) -> Option<String> {
     };
     // Exactly one separating space, then the token to end-of-string.
     let token = rest.strip_prefix(' ')?;
-    if is_hex48_lower(token) {
+    if is_hex_lower(token, 48) {
         Some(token.to_string())
     } else {
         None

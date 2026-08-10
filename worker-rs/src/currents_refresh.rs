@@ -7,7 +7,6 @@ pub const MIN_CHECK_INTERVAL_MS: i64 = 15 * 60 * 1000;
 pub const MIN_REGENERATE_INTERVAL_MS: i64 = 4 * 60 * 60 * 1000;
 pub const STALE_CURRENT_AGE_MS: i64 = 6 * 60 * 60 * 1000;
 pub const REFRESH_BATCH_SIZE: usize = 5;
-pub const COMPLETION_TIMEOUT_MS: i64 = 20_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CurrentContentKind {

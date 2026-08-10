@@ -27,19 +27,11 @@ impl RateLimiter {
     /// Port of `consume`: increments the fixed-window counter, rolling the
     /// window when `windowMs` has elapsed.
     pub fn consume(&mut self, now: i64, limit: i64, window_ms: i64) -> ConsumeResult {
-        let start_new = match self.window {
-            None => true,
-            Some((_, window_start)) => now - window_start >= window_ms,
-        };
-        let window_start = if start_new {
-            now
-        } else {
-            self.window.unwrap().1
-        };
-        let count = if start_new {
-            1
-        } else {
-            self.window.unwrap().0 + 1
+        let (count, window_start) = match self.window {
+            Some((count, window_start)) if now - window_start < window_ms => {
+                (count + 1, window_start)
+            }
+            _ => (1, now),
         };
         self.window = Some((count, window_start));
         let allowed = count <= limit;

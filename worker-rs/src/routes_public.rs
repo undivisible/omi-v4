@@ -18,7 +18,7 @@ use crate::public_api::{self as api, Budget, OperationResult};
 use crate::routes_ai::consume_rate_limit;
 use crate::routes_keys::{require_api_access, require_scope, ApiAuth};
 use crate::routes_memory::wasm_glue as memory;
-use crate::worker_util::{now_ms, uuid_v4};
+use crate::worker_util::{do_post, now_ms, uuid_v4};
 use crate::{managed_ai, speech};
 
 /// Register the public API and MCP routes on the shared glue router.
@@ -44,17 +44,6 @@ pub fn register(router: Router<'static, ()>) -> Router<'static, ()> {
         .post_async("/mcp", handle_mcp_post)
         .get_async("/mcp", handle_mcp_get)
         .delete_async("/mcp", handle_mcp_delete)
-}
-
-async fn do_post(stub: &Stub, url: &str, payload: &Value) -> Result<Response> {
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post);
-    let headers = Headers::new();
-    headers.set("content-type", "application/json")?;
-    init.with_headers(headers);
-    init.with_body(Some(JsValue::from_str(&payload.to_string())));
-    stub.fetch_with_request(Request::new_with_init(url, &init)?)
-        .await
 }
 
 fn speech_unavailable() -> OperationResult {

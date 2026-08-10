@@ -1,5 +1,6 @@
 #![cfg_attr(test, allow(dead_code))]
 
+use crate::approval::unix_time_ms;
 use crate::signals::{AudioEncoding, TranscriptDelta, TranscriptGap, TranscriptionAuth};
 use crate::signals::{NativeError, NativeEvent, TranscriptionState, TranscriptionStatus};
 use futures::{SinkExt, StreamExt};
@@ -449,46 +450,9 @@ async fn run(
             },
             message = socket.next() => match message {
                 Some(Ok(Message::Text(text))) => {
-                    if let Some(parsed) = state.parse_delta(text.as_ref(), unix_time_ms()) {
-                        let delta = parsed.delta;
-                        if delta.final_segment
-                            && config.request_id == crate::meeting_capture::CAPTURE_STREAM_ID
-                        {
-                            crate::meeting::observe_final_segment(
-                                &delta.text,
-                                diarization_key(&delta),
-                                segment_audio(&delta, parsed.word_derived),
-                            );
-                        }
-                        NativeEvent::TranscriptDelta(delta).send();
-                    }
+                    emit_parsed_delta(&config, &mut state, text.as_ref());
                 }
-                Some(Ok(Message::Close(_))) | None => match recover(
-                    &config,
-                    &plan,
-                    &mut state,
-                    &mut audio_receiver,
-                    &mut control_receiver,
-                    &pending_audio_bytes,
-                    &mut reconnect_buffer,
-                ).await {
-                    Some(reconnected) => {
-                        socket = reconnected;
-                        if !reconnect_buffer.flush(&mut socket, &config, state.epoch).await {
-                            let now = unix_time_ms();
-                            NativeEvent::TranscriptGap(state.reconnect_gap(now, now)).send();
-                            terminal_error(
-                                &config,
-                                "transcription_connection_lost",
-                                "transcription provider connection was lost while replaying buffered audio",
-                                state.epoch,
-                            );
-                            return;
-                        }
-                    }
-                    None => return,
-                },
-                Some(Err(_)) => match recover(
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => match recover(
                     &config,
                     &plan,
                     &mut state,
@@ -528,19 +492,7 @@ async fn drain_final_results(
         while let Some(message) = socket.next().await {
             match message {
                 Ok(Message::Text(text)) => {
-                    if let Some(parsed) = state.parse_delta(text.as_ref(), unix_time_ms()) {
-                        let delta = parsed.delta;
-                        if delta.final_segment
-                            && config.request_id == crate::meeting_capture::CAPTURE_STREAM_ID
-                        {
-                            crate::meeting::observe_final_segment(
-                                &delta.text,
-                                diarization_key(&delta),
-                                segment_audio(&delta, parsed.word_derived),
-                            );
-                        }
-                        NativeEvent::TranscriptDelta(delta).send();
-                    }
+                    emit_parsed_delta(config, state, text.as_ref());
                 }
                 Ok(Message::Close(_)) | Err(_) => break,
                 _ => {}
@@ -713,13 +665,18 @@ fn encode_audio(bytes: &[u8], encoding: AudioEncoding) -> Vec<u8> {
     output
 }
 
-#[cfg_attr(test, allow(dead_code))]
-fn unix_time_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
-        })
+fn emit_parsed_delta(config: &SttConfig, state: &mut TranscriptState, text: &str) {
+    if let Some(parsed) = state.parse_delta(text, unix_time_ms()) {
+        let delta = parsed.delta;
+        if delta.final_segment && config.request_id == crate::meeting_capture::CAPTURE_STREAM_ID {
+            crate::meeting::observe_final_segment(
+                &delta.text,
+                diarization_key(&delta),
+                segment_audio(&delta, parsed.word_derived),
+            );
+        }
+        NativeEvent::TranscriptDelta(delta).send();
+    }
 }
 
 #[derive(Deserialize)]

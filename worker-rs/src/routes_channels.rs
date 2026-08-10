@@ -466,7 +466,6 @@ async fn checkout_allowed(env: &Env, channel: Channel, channel_user_id: &str) ->
     global
 }
 
-#[allow(dead_code)]
 async fn signup_allowed(env: &Env, channel: Channel, channel_user_id: &str) -> bool {
     let (per_sender, _) = crate::routes_ai::consume_rate_limit(
         env,
@@ -852,7 +851,7 @@ pub async fn complete_channel_checkout(
         .await?;
     let changes = results
         .first()
-        .map(|r| r.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0))
+        .map(crate::worker_util::changes)
         .unwrap_or(0);
     if changes != 1 {
         return Ok(CompleteChannelCheckoutResult {
@@ -904,7 +903,6 @@ pub async fn live_channel_account(
     }))
 }
 
-#[allow(dead_code)]
 fn channel_uid() -> String {
     let mut bytes = [0u8; 16];
     getrandom::getrandom(&mut bytes).expect("getrandom");
@@ -918,7 +916,6 @@ fn channel_uid() -> String {
 }
 
 /// `signUpChannelSender`.
-#[allow(dead_code)]
 pub async fn sign_up_channel_sender(
     env: &Env,
     channel: Channel,
@@ -996,14 +993,8 @@ pub async fn sign_up_channel_sender(
             ])?,
         ])
         .await?;
-    let account_changes = results
-        .get(1)
-        .map(|r| r.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0))
-        .unwrap_or(0);
-    let binding_changes = results
-        .get(2)
-        .map(|r| r.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0))
-        .unwrap_or(0);
+    let account_changes = results.get(1).map(crate::worker_util::changes).unwrap_or(0);
+    let binding_changes = results.get(2).map(crate::worker_util::changes).unwrap_or(0);
     if account_changes != 1 || binding_changes != 1 {
         db.prepare("DELETE FROM users WHERE uid = ?1")
             .bind(&[uid.into()])?
@@ -1017,40 +1008,6 @@ pub async fn sign_up_channel_sender(
         });
     }
     Ok(SignupResult::Created { uid })
-}
-
-/// `claimChannelAccount`.
-#[allow(dead_code)]
-pub async fn claim_channel_account(
-    env: &Env,
-    channel: Channel,
-    channel_user_id: &str,
-    claimed_by_uid: &str,
-    now: i64,
-) -> Result<Option<String>> {
-    let account = live_channel_account(env, channel, channel_user_id).await?;
-    let Some(account) = account else {
-        return Ok(None);
-    };
-    let db = env.d1("DB")?;
-    let result = db
-        .prepare(
-            "UPDATE channel_accounts SET claimed_at = ?1, claimed_by_uid = ?2\n       WHERE uid = ?3 AND claimed_at IS NULL AND retired_at IS NULL",
-        )
-        .bind(&[
-            (now as f64).into(),
-            claimed_by_uid.into(),
-            account.uid.clone().into(),
-        ])?
-        .run()
-        .await?;
-    let changes = result
-        .meta()
-        .ok()
-        .flatten()
-        .and_then(|m| m.changes)
-        .unwrap_or(0);
-    Ok((changes == 1).then_some(account.uid))
 }
 
 async fn first_contact_state(
@@ -1645,7 +1602,7 @@ async fn unlink_channel(env: &Env, uid: &str, channel: Channel, now: i64) -> Res
         .await?;
     let changes = results
         .first()
-        .map(|r| r.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0))
+        .map(crate::worker_util::changes)
         .unwrap_or(0);
     if changes > 0 {
         db.prepare(

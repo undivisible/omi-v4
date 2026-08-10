@@ -11,8 +11,8 @@ use crate::computer_use::{
     available as computer_use_available, capabilities as computer_use_capabilities,
 };
 use crate::computer_use_tools::{
-    COMPUTER_INVOKE_TOOL, COMPUTER_SET_VALUE_TOOL, computer_use_proposal,
-    valid_computer_tool_identity,
+    COMPUTER_INVOKE_TOOL, COMPUTER_SET_VALUE_TOOL, INVALID_COMPUTER_USE_TOOL,
+    computer_use_proposal, valid_computer_tool_identity,
 };
 use crate::hosted_search::{SearchBackend, dispatch as dispatch_hosted_search};
 use crate::live_voice::LiveFunctionCall;
@@ -72,6 +72,7 @@ const MAX_APPROVAL_RESPONSE_BYTES: usize = 32 * 1024;
 const MAX_MEMORY_APPLY_COMMITS: usize = 256;
 const MAX_MEMORY_RECORD_JSON_BYTES: usize = 256 * 1024;
 const MAX_CLOUD_MEMORY_CREDENTIAL_BYTES: usize = 16 * 1024;
+const MEMORY_LOCK_POISONED: &str = "memory database lock was poisoned";
 #[cfg(test)]
 const MAX_ACTIVE_AUDIO_SESSIONS: usize = 8;
 #[cfg(test)]
@@ -737,9 +738,10 @@ async fn prepare_computer_use_registration(
     cancellation: &CancellationToken,
 ) -> Result<PreparedComputerUseRegistration, String> {
     let mut proposal = computer_use_proposal(parent_id, call_id, tool_name, arguments)?;
-    let action = proposal.computer_action.clone().ok_or_else(|| {
-        "assistant provider returned an invalid computer-use tool call".to_owned()
-    })?;
+    let action = proposal
+        .computer_action
+        .clone()
+        .ok_or_else(|| INVALID_COMPUTER_USE_TOOL.to_owned())?;
     let bound = bind_computer_use_action(action, cancellation).await?;
     proposal.expires_at_ms = Some(
         proposal
@@ -1046,22 +1048,14 @@ impl AssistantProvider for RsAiAssistantProvider {
                             || !valid_computer_tool_identity(&call_id, &tool_name)
                             || tool_names.insert(call_id, tool_name).is_some()
                         {
-                            Err(
-                                "assistant provider returned an invalid computer-use tool call"
-                                    .to_owned(),
-                            )
+                            Err(INVALID_COMPUTER_USE_TOOL.to_owned())
                         } else {
                             continue;
                         }
                     }
                     Ok(StreamEvent::ToolCallEnd { call_id, arguments }) => {
                         let Some(tool_name) = tool_names.remove(&call_id) else {
-                            let _ = sender
-                                .send(Err(
-                                    "assistant provider returned an invalid computer-use tool call"
-                                        .to_owned(),
-                                ))
-                                .await;
+                            let _ = sender.send(Err(INVALID_COMPUTER_USE_TOOL.to_owned())).await;
                             return;
                         };
                         match computer_use_proposal(&request_id, &call_id, &tool_name, arguments) {
@@ -1087,10 +1081,7 @@ impl AssistantProvider for RsAiAssistantProvider {
                                         Err(message) => Err(message),
                                     }
                                 }
-                                None => Err(
-                                    "assistant provider returned an invalid computer-use tool call"
-                                        .to_owned(),
-                                ),
+                                None => Err(INVALID_COMPUTER_USE_TOOL.to_owned()),
                             },
                             Err(message) => Err(message),
                         }
@@ -1428,13 +1419,6 @@ impl CommandDispatcher {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn channel() -> (mpsc::Sender<ClientCommand>, Self) {
         Self::channel_inner(None, None, None)
-    }
-
-    #[allow(dead_code)]
-    pub fn channel_with_transcription(
-        transcription: mpsc::Sender<TranscriptionControl>,
-    ) -> (mpsc::Sender<ClientCommand>, Self) {
-        Self::channel_inner(Some(transcription), None, None)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -2319,9 +2303,7 @@ async fn local_memory_context(
     let memory = state.lock().await.memory.clone()?;
     let query = text.to_owned();
     let task = spawn_blocking(move || {
-        let memory = memory
-            .lock()
-            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        let memory = memory.lock().map_err(|_| MEMORY_LOCK_POISONED.to_owned())?;
         memory
             .database
             .search(SearchInput {
@@ -2455,9 +2437,7 @@ async fn local_profile_context(
 ) -> Option<ProfileContext> {
     let memory = state.lock().await.memory.clone()?;
     let task = spawn_blocking(move || {
-        let memory = memory
-            .lock()
-            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        let memory = memory.lock().map_err(|_| MEMORY_LOCK_POISONED.to_owned())?;
         memory
             .database
             .profiles(ProfilesInput {
@@ -2508,17 +2488,12 @@ fn combined_context(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the assistant turn carries independently sourced inputs; grouping them would only relabel the arity"
-)]
 async fn dispatch_assistant(
     request_id: &str,
     state: &Mutex<RuntimeState>,
     provider: Arc<dyn AssistantProvider>,
     text: String,
     memory_context: Option<String>,
-    local_ai_available: bool,
     cancellation: &CancellationToken,
     origin: Option<MessageOrigin>,
 ) {
@@ -2587,7 +2562,6 @@ async fn dispatch_assistant(
     // Models refuses too much ("Unable to work with that request.") and has no
     // tool/memory access, so it is kept for small local jobs only —
     // summarization, onboarding, meeting extraction, model selection.
-    let _ = local_ai_available;
     // Online context is intentionally NOT de-identified: the cloud side has
     // to recognize the user across iMessage/Telegram channels, so identity
     // must survive the hop.
@@ -3018,7 +2992,6 @@ async fn execute(
                 assistant_provider,
                 text,
                 memory_context,
-                crate::local_ai::is_available(),
                 &cancellation,
                 origin,
             )
@@ -3631,9 +3604,8 @@ async fn scan_onboarding(
         for scan in scans {
             let mut memory_source_id = None;
             if let Some(memory) = &memory {
-                let mut memory_guard = memory
-                    .lock()
-                    .map_err(|_| "memory database lock was poisoned".to_owned())?;
+                let mut memory_guard =
+                    memory.lock().map_err(|_| MEMORY_LOCK_POISONED.to_owned())?;
                 for item in &scan.memories {
                     if scan_cancellation.is_cancelled() {
                         return Ok(None);
@@ -3717,9 +3689,7 @@ async fn scan_onboarding(
                 let languages = detected_languages.clone();
                 let summary = summary.clone();
                 let ingest = spawn_blocking(move || {
-                    let mut memory = memory
-                        .lock()
-                        .map_err(|_| "memory database lock was poisoned".to_owned())?;
+                    let mut memory = memory.lock().map_err(|_| MEMORY_LOCK_POISONED.to_owned())?;
                     ingest_onboarding_profile(
                         &mut memory,
                         name.as_deref(),
@@ -4020,9 +3990,7 @@ fn spawn_capture(
     cancellation: CancellationToken,
 ) -> JoinHandle<Result<Option<zkr::Remembered>, String>> {
     spawn_blocking(move || {
-        let mut memory = memory
-            .lock()
-            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        let mut memory = memory.lock().map_err(|_| MEMORY_LOCK_POISONED.to_owned())?;
         if cancellation.is_cancelled() {
             return Ok(None);
         }
@@ -4108,9 +4076,7 @@ fn spawn_transcript_extraction(
             if cancellation.is_cancelled() {
                 return Ok(0);
             }
-            let mut memory = memory
-                .lock()
-                .map_err(|_| "memory database lock was poisoned".to_owned())?;
+            let mut memory = memory.lock().map_err(|_| MEMORY_LOCK_POISONED.to_owned())?;
             store_candidate_claims(
                 &mut memory,
                 &ingestion_key,
@@ -4322,9 +4288,7 @@ async fn search(
         return;
     }
     let task = spawn_blocking(move || {
-        let memory = memory
-            .lock()
-            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        let memory = memory.lock().map_err(|_| MEMORY_LOCK_POISONED.to_owned())?;
         memory
             .database
             .search(SearchInput {
@@ -4452,9 +4416,7 @@ fn apply_configured_memory(
     request_id: &str,
     commits: Vec<MemoryApplyCommit>,
 ) -> Result<MemoryApplied, String> {
-    let mut memory = memory
-        .lock()
-        .map_err(|_| "memory database lock was poisoned".to_owned())?;
+    let mut memory = memory.lock().map_err(|_| MEMORY_LOCK_POISONED.to_owned())?;
     let export_commits = commits
         .into_iter()
         .map(|commit| {
@@ -4540,9 +4502,7 @@ async fn export_memory(
         return;
     };
     let task = spawn_blocking(move || {
-        let mut memory = memory
-            .lock()
-            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        let mut memory = memory.lock().map_err(|_| MEMORY_LOCK_POISONED.to_owned())?;
         export_configured_memory(
             &mut memory,
             after_commit,
@@ -4638,9 +4598,7 @@ async fn list_memory_items(
         return;
     };
     let task = spawn_blocking(move || {
-        let memory = memory
-            .lock()
-            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        let memory = memory.lock().map_err(|_| MEMORY_LOCK_POISONED.to_owned())?;
         list_configured_memory_items(&memory, limit)
     });
     match await_blocking(task, cancellation).await {
@@ -4745,9 +4703,7 @@ async fn correct_memory(
         return;
     };
     let task = spawn_blocking(move || {
-        let mut memory = memory
-            .lock()
-            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        let mut memory = memory.lock().map_err(|_| MEMORY_LOCK_POISONED.to_owned())?;
         correct_configured_memory(
             &mut memory,
             claim_id,
@@ -4793,9 +4749,7 @@ async fn delete_memory_source(
         return;
     };
     let task = spawn_blocking(move || {
-        let mut memory = memory
-            .lock()
-            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        let mut memory = memory.lock().map_err(|_| MEMORY_LOCK_POISONED.to_owned())?;
         delete_configured_memory_source(&mut memory, source_id, deleted_at_ms)
     });
     match await_mutating_blocking(task, cancellation).await {
@@ -7926,7 +7880,6 @@ mod tests {
             Arc::clone(&provider),
             "what happened at the summit today?".to_owned(),
             None,
-            false,
             &CancellationToken::new(),
             None,
         )
@@ -7960,7 +7913,6 @@ mod tests {
             Arc::clone(&provider),
             "what coffee do I like?".to_owned(),
             Some("Relevant synced memory:\n- Sam prefers espresso".to_owned()),
-            false,
             &CancellationToken::new(),
             None,
         )
@@ -7985,7 +7937,6 @@ mod tests {
             provider,
             "plain message".to_owned(),
             None,
-            false,
             &CancellationToken::new(),
             None,
         )
@@ -8060,7 +8011,6 @@ mod tests {
             provider,
             "open my latest draft".to_owned(),
             None,
-            true,
             &CancellationToken::new(),
             Some(MessageOrigin::Overlay),
         )
@@ -8094,7 +8044,6 @@ mod tests {
             provider,
             "where do I work?".to_owned(),
             None,
-            false,
             &CancellationToken::new(),
             None,
         )
@@ -8175,7 +8124,6 @@ mod tests {
                 provider,
                 "what is my name?".to_owned(),
                 None,
-                false,
                 &cancellation,
                 None,
             )
@@ -8262,7 +8210,6 @@ mod tests {
             provider,
             "what do you know about me?".to_owned(),
             None,
-            false,
             &cancellation,
             None,
         )
@@ -8299,7 +8246,6 @@ mod tests {
             provider,
             "email sam.jones@example.com about my plans".to_owned(),
             Some("- Email is sam.jones@example.com\n- Phone is +1 (555) 123-4567".to_owned()),
-            false,
             &CancellationToken::new(),
             None,
         )
@@ -8345,7 +8291,6 @@ mod tests {
             provider,
             "plan".to_owned(),
             None,
-            false,
             &CancellationToken::new(),
             None,
         )
@@ -8375,7 +8320,6 @@ mod tests {
             cancelled_provider,
             "cancel".to_owned(),
             None,
-            false,
             &cancellation,
             None,
         )
@@ -8404,7 +8348,6 @@ mod tests {
             reconfiguring_provider,
             "reconfigure".to_owned(),
             None,
-            false,
             &CancellationToken::new(),
             None,
         )
@@ -8439,7 +8382,6 @@ mod tests {
             provider,
             "hi".to_owned(),
             None,
-            false,
             &CancellationToken::new(),
             None,
         )

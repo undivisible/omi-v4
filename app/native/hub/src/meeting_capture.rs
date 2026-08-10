@@ -451,6 +451,19 @@ pub(crate) fn parse_wav_header(reader: &mut impl std::io::Read) -> Option<WavHea
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn capture_stt_config() -> crate::stt::SttConfig {
+    crate::stt::SttConfig {
+        request_id: CAPTURE_STREAM_ID.to_owned(),
+        audio_stream_id: CAPTURE_STREAM_ID.to_owned(),
+        device_id: CAPTURE_STREAM_ID.to_owned(),
+        language: "multi".to_owned(),
+        sample_rate_hz: CAPTURE_SAMPLE_RATE_HZ,
+        channels: 1,
+        encoding: crate::signals::AudioEncoding::PcmS16Le,
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use super::{
@@ -459,8 +472,8 @@ mod platform {
         pcm_bytes, reset_speaker_tracker,
     };
     use crate::capture_policy::CapturePlan;
-    use crate::signals::{AudioEncoding, NativeError, NativeEvent, TranscriptionAuth};
-    use crate::stt::{SttConfig, SttHandle};
+    use crate::signals::{NativeError, NativeEvent, TranscriptionAuth};
+    use crate::stt::SttHandle;
     use corti_coreaudio::{CaptureSession, OutputLayout, TapTarget};
     use std::fs::File;
     use std::io::{Read, Seek, SeekFrom};
@@ -684,15 +697,7 @@ mod platform {
         if !plan.system_audio {
             return Err("system audio capture is disallowed by the current mode".to_owned());
         }
-        let config = SttConfig {
-            request_id: CAPTURE_STREAM_ID.to_owned(),
-            audio_stream_id: CAPTURE_STREAM_ID.to_owned(),
-            device_id: CAPTURE_STREAM_ID.to_owned(),
-            language: "multi".to_owned(),
-            sample_rate_hz: CAPTURE_SAMPLE_RATE_HZ,
-            channels: 1,
-            encoding: AudioEncoding::PcmS16Le,
-        };
+        let config = super::capture_stt_config();
         let stt = crate::stt::spawn(config, &auth, trusted_worker_origin.as_deref())
             .map_err(|error| error.to_string())?;
         let report_unavailable = plan.microphone;
@@ -746,8 +751,8 @@ mod platform {
         mix_two_track_to_mono_measured, observe_track_energy, pcm_bytes, reset_speaker_tracker,
     };
     use crate::capture_policy::CapturePlan;
-    use crate::signals::{AudioEncoding, NativeError, NativeEvent, TranscriptionAuth};
-    use crate::stt::{SttConfig, SttHandle};
+    use crate::signals::{NativeError, NativeEvent, TranscriptionAuth};
+    use crate::stt::SttHandle;
     use std::collections::VecDeque;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
@@ -951,15 +956,7 @@ mod platform {
         if !plan.system_audio {
             return Err("system audio capture is disallowed by the current mode".to_owned());
         }
-        let config = SttConfig {
-            request_id: CAPTURE_STREAM_ID.to_owned(),
-            audio_stream_id: CAPTURE_STREAM_ID.to_owned(),
-            device_id: CAPTURE_STREAM_ID.to_owned(),
-            language: "multi".to_owned(),
-            sample_rate_hz: CAPTURE_SAMPLE_RATE_HZ,
-            channels: 1,
-            encoding: AudioEncoding::PcmS16Le,
-        };
+        let config = super::capture_stt_config();
         let stt = crate::stt::spawn(config, &auth, trusted_worker_origin.as_deref())
             .map_err(|error| error.to_string())?;
         let report_unavailable = plan.microphone;

@@ -683,27 +683,6 @@ pub struct AudioDispatcher {
 }
 
 impl AudioDispatcher {
-    #[allow(dead_code)]
-    pub fn channel() -> (
-        mpsc::Sender<AudioChunk>,
-        mpsc::Sender<TranscriptionControl>,
-        Self,
-    ) {
-        let (sender, receiver) = mpsc::channel(AUDIO_QUEUE_CAPACITY);
-        let (control_sender, controls) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
-        (
-            sender,
-            control_sender,
-            Self {
-                receiver,
-                controls,
-                sessions: AudioSessions::default(),
-                live: LiveSessions::default(),
-                live_provider: Arc::new(GeminiLiveProvider),
-            },
-        )
-    }
-
     pub fn channel_with_live_tools() -> (
         mpsc::Sender<AudioChunk>,
         mpsc::Sender<TranscriptionControl>,

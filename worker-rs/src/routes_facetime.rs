@@ -15,7 +15,7 @@ use crate::facetime::{
 };
 use crate::public_api::{self as api, OperationResult};
 use crate::routes_ai::consume_rate_limit;
-use crate::worker_util::{now_ms, secret_or_var, uuid_v4};
+use crate::worker_util::{do_post, now_ms, secret_or_var, stt_admission_stub, uuid_v4};
 
 const BRIDGE_PORT: u16 = 8080;
 const MAXIMUM_START_BODY_BYTES: usize = 16_384;
@@ -51,22 +51,6 @@ struct StoredSession {
 
 fn response(value: Value, status: u16) -> Result<Response> {
     Ok(Response::from_json(&value)?.with_status(status))
-}
-
-async fn do_post(stub: &Stub, url: &str, payload: &Value) -> Result<Response> {
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post);
-    let headers = Headers::new();
-    headers.set("content-type", "application/json")?;
-    init.with_headers(headers);
-    init.with_body(Some(JsValue::from_str(&payload.to_string())));
-    stub.fetch_with_request(Request::new_with_init(url, &init)?)
-        .await
-}
-
-fn stt_admission_stub(env: &Env) -> Result<Stub> {
-    env.durable_object("STT_ADMISSION")?
-        .get_by_name("managed-stt-global")
 }
 
 fn bridge_stub(env: &Env, session_id: &str) -> Result<Stub> {

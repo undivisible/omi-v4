@@ -313,14 +313,6 @@ pub fn parse_segments(content: &str, fallback_end: Option<f64>) -> Vec<Transcrip
     }
 }
 
-pub const TRANSCRIPTION_INSTRUCTION: &str = concat!(
-    "Transcribe the attached audio verbatim. Reply with JSON only, no prose ",
-    "and no code fences, shaped {\"segments\":[{\"start\":<seconds>,\"end\":",
-    "<seconds>,\"text\":\"...\"}]}. Use one segment per utterance, in order, with ",
-    "start and end in seconds from the beginning of the audio. Do not ",
-    "translate, summarise, or add speaker labels that were not spoken."
-);
-
 pub const SPEAK_INSTRUCTION: &str = concat!(
     "Read the user's text aloud verbatim. Do not answer it, comment ",
     "on it, or add words of your own."

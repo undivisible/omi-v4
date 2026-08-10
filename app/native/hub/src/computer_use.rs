@@ -27,8 +27,6 @@ use std::path::Path;
 use std::sync::OnceLock;
 #[cfg(all(test, target_os = "macos"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(target_os = "macos")]
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_COMPUTER_VALUE_BYTES: usize = 16 * 1024;
 const MAX_TARGET_NAME_BYTES: usize = 1_024;
@@ -165,7 +163,7 @@ pub(crate) fn bind(
     if !valid_action(&display) {
         return Err(ComputerUseError::TargetUnavailable);
     }
-    let deadline_at_ms = now_ms().saturating_add(30_000);
+    let deadline_at_ms = crate::approval::unix_time_ms().saturating_add(30_000);
     let executor = NativeExecutor::default();
     let capabilities = executor
         .capabilities()
@@ -204,7 +202,7 @@ pub(crate) fn bind(
         .observe_semantic(cancellation, deadline_at_ms)
         .map_err(|_| ComputerUseError::TargetUnavailable)?;
     observation
-        .validate(now_ms())
+        .validate(crate::approval::unix_time_ms())
         .map_err(|_| ComputerUseError::TargetUnavailable)?;
     let target_name = match &display {
         ComputerUseAction::Invoke { target_name, .. }
@@ -234,8 +232,13 @@ pub(crate) fn bind(
             value: value.clone(),
         },
     };
-    semantic::route_action(&action, &observation, &target, now_ms())
-        .map_err(|_| ComputerUseError::TargetUnavailable)?;
+    semantic::route_action(
+        &action,
+        &observation,
+        &target,
+        crate::approval::unix_time_ms(),
+    )
+    .map_err(|_| ComputerUseError::TargetUnavailable)?;
     Ok(BoundComputerUseAction {
         display,
         target,
@@ -381,7 +384,7 @@ pub(crate) fn execute(
     AUTHORITY_MINT_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
     let authority = host_authority()?;
     if host_session_id()? != prepared.session_id
-        || now_ms() >= authority_expires_at_ms
+        || crate::approval::unix_time_ms() >= authority_expires_at_ms
         || authority_expires_at_ms > prepared.bound.expires_at_ms
     {
         return Err(ComputerUseError::Protocol);
@@ -488,15 +491,6 @@ fn hashed_identifier(prefix: &str, value: &str) -> String {
 #[cfg(target_os = "macos")]
 fn lower_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-#[cfg(target_os = "macos")]
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            duration.as_millis().min(i64::MAX as u128) as i64
-        })
 }
 
 #[cfg(test)]
@@ -712,7 +706,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn live_semantic_observation_when_permitted() {
-        use super::now_ms;
         use praefectus::{CancellationToken, NativeExecutor};
 
         if std::env::var("OMI_LIVE_CU").as_deref() != Ok("1") {
@@ -734,14 +727,14 @@ mod tests {
         }
         let executor = NativeExecutor::default();
         let cancellation = CancellationToken::default();
-        let deadline = now_ms().saturating_add(15_000);
+        let deadline = crate::approval::unix_time_ms().saturating_add(15_000);
         let observation = executor
             .observe_semantic(&cancellation, deadline)
             .unwrap_or_else(|error| {
                 panic!("semantic observation failed with Accessibility granted: {error:?}")
             });
         observation
-            .validate(now_ms())
+            .validate(crate::approval::unix_time_ms())
             .unwrap_or_else(|error| panic!("observation invalid: {error:?}"));
         eprintln!(
             "live semantic observation: generation={} elements={}",
