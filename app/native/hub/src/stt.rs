@@ -327,7 +327,7 @@ impl ReconnectAudioBuffer {
         }
         if self.bytes.saturating_add(len) <= MAX_RECONNECT_BUFFER_BYTES {
             self.bytes += len;
-            self.frames.push(frame);
+            self.frames.push_back(frame);
         }
         pending_audio_bytes.fetch_sub(len, Ordering::AcqRel);
     }
@@ -711,7 +711,7 @@ fn encode_audio(bytes: Vec<u8>, encoding: AudioEncoding) -> Vec<u8> {
     }
     let mut output = Vec::with_capacity(bytes.len().saturating_mul(2));
     for sample in bytes {
-        output.extend_from_slice(&((i16::from(*sample) - 128) << 8).to_le_bytes());
+        output.extend_from_slice(&((i16::from(sample) - 128) << 8).to_le_bytes());
     }
     output
 }

@@ -2496,7 +2496,10 @@ async fn local_profile_and_memory_context(
     text: &str,
     cancellation: &CancellationToken,
 ) -> (Option<ProfileContext>, Option<String>) {
-    let memory = state.lock().await.memory.clone()?;
+    let memory = match state.lock().await.memory.clone() {
+        Some(memory) => memory,
+        None => return (None, None),
+    };
     let query = text.to_owned();
     let task = spawn_blocking(move || {
         let memory = memory
@@ -2659,9 +2662,8 @@ async fn dispatch_assistant(
         };
         (profile, memory_context)
     };
-    let user_profile = match user_profile_path.as_deref() {
+    let user_profile = match user_profile_path {
         Some(path) => {
-            let path = path.clone();
             let task = spawn_blocking(move || Ok(crate::user_profile::read_user_profile(&path)));
             match await_blocking(task, cancellation).await {
                 BlockingOutcome::Complete(profile) => profile,
