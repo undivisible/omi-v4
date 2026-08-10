@@ -172,10 +172,12 @@ jobs:
           shared-key: hub-macos
       - name: Hub quality + computer-use probe
         run: |
-          export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macos:/usr/lib/swift"
+          DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macos:/usr/lib/swift"
+          export DYLD_FALLBACK_LIBRARY_PATH
           bash ../../../scripts/hub-quality.sh
           bash ../../../scripts/hub-computer-use.sh
       - name: Praefectus capability report
         run: |
-          export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macos:/usr/lib/swift"
+          DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macos:/usr/lib/swift"
+          export DYLD_FALLBACK_LIBRARY_PATH
           cargo test --lib computer_use::tests::native_praefectus_capabilities_probe_is_internally_consistent -- --exact --nocapture
