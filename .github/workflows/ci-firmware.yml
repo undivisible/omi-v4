@@ -30,7 +30,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-firmware-${{ github.ref }}
+  group: ci-firmware-${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -51,12 +51,14 @@ jobs:
   discover:
     name: Discover firmware targets
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
       count: ${{ steps.targets.outputs.count }}
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
       # Same script the release workflow uses. It parses the west build commands
       # out of firmware/README.md and fails if any path it derives is missing,
       # so a README that drifts from the tree breaks CI here rather than at
@@ -74,8 +76,9 @@ jobs:
   workspace:
     name: NCS west workspace
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     container:
-      image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:f1dca44678dae83e37404e33f369786f5b2ffe2ed497eec1815f66c3a868bace  # v3.4.0
       options: --user root
     defaults:
       run:
@@ -84,11 +87,12 @@ jobs:
       - name: Trust the workspace inside the container
         run: git config --global --add safe.directory '*'
 
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
       - name: Restore the west workspace
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: ${{ env.NCS_WORKSPACE }}
           key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-parentfix-v1
@@ -135,9 +139,10 @@ jobs:
   build:
     name: ${{ matrix.id }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     needs: [discover, workspace]
     container:
-      image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:f1dca44678dae83e37404e33f369786f5b2ffe2ed497eec1815f66c3a868bace  # v3.4.0
       options: --user root
     # The image's /bin/sh is dash, which has no `set -o pipefail`.
     defaults:
@@ -155,8 +160,9 @@ jobs:
       - name: Trust the workspace inside the container
         run: git config --global --add safe.directory '*'
 
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
       - name: Announce known-broken targets
         if: matrix.required != 'true'
         env:
@@ -166,7 +172,7 @@ jobs:
           echo "::warning::${TARGET_ID} is not a required check: firmware/README.md's Migration status table records it as not building under NCS ${NCS_VERSION} (${NOTE}). Remove the row's 'does not build' state once the nrfx 3.x port lands and this target becomes gating automatically."
 
       - name: Restore the west workspace
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: ${{ env.NCS_WORKSPACE }}
           key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-parentfix-v1
@@ -176,7 +182,7 @@ jobs:
         run: bash .github/scripts/setup-ncs-toolchain.sh
 
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: ~/.cache/ccache
           key: ccache-fw-${{ matrix.id }}-${{ github.sha }}
@@ -232,13 +238,13 @@ jobs:
       # CONFIG_RUST=n and skip this.
       - name: Cache the Rust toolchain and cargo registry
         if: matrix.app_dir == 'firmware/omi'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             ~/.rustup/toolchains
             ~/.cargo/registry
             ~/.cargo/git
-          key: rust-fw-${{ env.RUST_TARGET }}-${{ hashFiles('firmware/omi/rust/Cargo.toml') }}
+          key: rust-fw-${{ env.RUST_TARGET }}-${{ hashFiles('firmware/omi/rust/Cargo.lock') }}
           restore-keys: |
             rust-fw-${{ env.RUST_TARGET }}-
 
@@ -370,17 +376,19 @@ jobs:
   rust:
     name: omi-rust host tests
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
       - name: Cache the Rust toolchain and cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             ~/.rustup/toolchains
             ~/.cargo/registry
             ~/.cargo/git
-          key: rust-fw-host-${{ hashFiles('firmware/omi/rust/Cargo.toml') }}
+          key: rust-fw-host-${{ hashFiles('firmware/omi/rust/Cargo.lock') }}
           restore-keys: |
             rust-fw-host-
 
@@ -421,7 +429,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     container:
-      image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:f1dca44678dae83e37404e33f369786f5b2ffe2ed497eec1815f66c3a868bace  # v3.4.0
       options: --user root
     defaults:
       run:
@@ -430,8 +438,9 @@ jobs:
       - name: Trust the workspace inside the container
         run: git config --global --add safe.directory '*'
 
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
       - name: Resolve the NCS toolchain on PATH
         run: bash .github/scripts/setup-ncs-toolchain.sh
 
@@ -444,13 +453,13 @@ jobs:
           env -u LD_LIBRARY_PATH bc --version | head -n 1
 
       - name: Cache the Rust toolchain and cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             ~/.rustup/toolchains
             ~/.cargo/registry
             ~/.cargo/git
-          key: rust-fw-bsim-${{ env.BSIM_RUST_TARGET }}-${{ hashFiles('firmware/omi/rust/Cargo.toml') }}
+          key: rust-fw-bsim-${{ env.BSIM_RUST_TARGET }}-${{ hashFiles('firmware/omi/rust/Cargo.lock') }}
           restore-keys: |
             rust-fw-bsim-${{ env.BSIM_RUST_TARGET }}-
 

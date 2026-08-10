@@ -27,6 +27,7 @@ jobs:
   version:
     name: Resolve version
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.meta.outputs.version }}
       dry_run: ${{ steps.meta.outputs.dry_run }}
@@ -54,16 +55,18 @@ jobs:
   android:
     name: Android
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     needs: version
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4
         with:
           distribution: temurin
           java-version: '21'
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2  # v2
         with:
           channel: stable
           cache: true
@@ -76,7 +79,7 @@ jobs:
           rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 
       - name: Cache pub, Gradle and Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             ~/.pub-cache
@@ -85,7 +88,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             app/native/hub/target
-          key: mobile-android-${{ runner.os }}-${{ hashFiles('app/pubspec.lock', 'app/android/**/*.gradle*', 'app/android/gradle/wrapper/gradle-wrapper.properties', 'app/native/hub/Cargo.toml') }}
+          key: mobile-android-${{ runner.os }}-${{ hashFiles('app/pubspec.lock', 'app/android/**/*.gradle*', 'app/android/gradle/wrapper/gradle-wrapper.properties', 'app/native/hub/Cargo.lock') }}
           restore-keys: |
             mobile-android-${{ runner.os }}-
 
@@ -203,7 +206,7 @@ jobs:
             "${out}/omi-${RELEASE_VERSION}-android${suffix}.aab"
           ls -l "${out}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: mobile-android
           path: artifacts/*
@@ -213,11 +216,13 @@ jobs:
   ios:
     name: iOS
     runs-on: macos-15
+    timeout-minutes: 120
     needs: version
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: subosito/flutter-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2  # v2
         with:
           channel: stable
           cache: true
@@ -230,7 +235,7 @@ jobs:
           rustup target add aarch64-apple-ios
 
       - name: Cache pub, CocoaPods and Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             ~/.pub-cache
@@ -238,7 +243,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             app/native/hub/target
-          key: mobile-ios-${{ runner.os }}-${{ hashFiles('app/pubspec.lock', 'app/ios/Podfile.lock', 'app/native/hub/Cargo.toml') }}
+          key: mobile-ios-${{ runner.os }}-${{ hashFiles('app/pubspec.lock', 'app/ios/Podfile.lock', 'app/native/hub/Cargo.lock') }}
           restore-keys: |
             mobile-ios-${{ runner.os }}-
 
@@ -398,7 +403,7 @@ jobs:
           fi
           ls -l "${out}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: mobile-ios
           path: artifacts/*
@@ -408,9 +413,10 @@ jobs:
   bundle:
     name: Bundle mobile artifacts
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: [version, android, ios]
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: dist
           pattern: mobile-*
@@ -423,7 +429,7 @@ jobs:
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: mobile-release-bundle
           path: dist/*
@@ -449,18 +455,19 @@ jobs:
   publish:
     name: Publish mobile release
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: [version, bundle]
     if: needs.version.outputs.dry_run == 'false'
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           name: mobile-release-bundle
           path: dist
 
       - name: Create the GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           name: Mobile ${{ needs.version.outputs.version }}
           tag_name: ${{ github.ref_name }}
