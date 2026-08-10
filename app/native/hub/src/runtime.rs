@@ -2311,6 +2311,11 @@ fn assistant_prompt(memory_context: Option<&str>, text: &str) -> String {
     }
 }
 
+fn shared_http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
 async fn local_memory_context(
     state: &Mutex<RuntimeState>,
     text: &str,
@@ -2398,7 +2403,7 @@ async fn cloud_memory_context(
     }
     let response = tokio::select! {
         () = cancellation.cancelled() => return Err("memory recall was cancelled".to_owned()),
-        result = tokio::time::timeout(Duration::from_secs(15), reqwest::Client::new()
+        result = tokio::time::timeout(Duration::from_secs(15), shared_http_client()
             .get(endpoint)
             .bearer_auth(config.credential)
             .send()) => result.map_err(|_| "memory recall timed out".to_owned())?
@@ -2486,6 +2491,83 @@ async fn local_profile_context(
     }
 }
 
+async fn local_profile_and_memory_context(
+    state: &Mutex<RuntimeState>,
+    text: &str,
+    cancellation: &CancellationToken,
+) -> (Option<ProfileContext>, Option<String>) {
+    let memory = state.lock().await.memory.clone()?;
+    let query = text.to_owned();
+    let task = spawn_blocking(move || {
+        let memory = memory
+            .lock()
+            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        let profile_context = match memory.database.profiles(ProfilesInput {
+            tenant_id: memory.tenant_id.clone(),
+            person_id: memory.person_id.clone(),
+            limit: PROFILE_CONTEXT_ITEMS,
+        }) {
+            Ok(profiles) => {
+                let lines: Vec<String> = profiles
+                    .into_iter()
+                    .filter(|profile| !crate::user_profile::is_soul_section_key(&profile.key))
+                    .map(|profile| format!("- {}: {}", profile.key, profile.value))
+                    .collect();
+                if lines.is_empty() {
+                    None
+                } else {
+                    Some(ProfileContext {
+                        lines: lines.join("\n"),
+                    })
+                }
+            }
+            Err(_) => None,
+        };
+        let memory_context = match memory.database.search(SearchInput {
+            tenant_id: memory.tenant_id.clone(),
+            enabled_features: Vec::new(),
+            person_id: memory.person_id.clone(),
+            query,
+            limit: LOCAL_MEMORY_CONTEXT_ITEMS,
+            query_embedding: None,
+            as_of: None,
+        }) {
+            Ok(pack) => {
+                let mut distilled: Vec<String> = Vec::new();
+                let mut evidence: Vec<String> = Vec::new();
+                for item in pack.items {
+                    let excerpt = item.excerpt.trim();
+                    if excerpt.is_empty() {
+                        continue;
+                    }
+                    let line = format!("- {excerpt}");
+                    match item.memory {
+                        MemoryRef::Claim(_) | MemoryRef::DailyReview(_) => distilled.push(line),
+                        MemoryRef::Evidence(_) | MemoryRef::Source(_) => evidence.push(line),
+                        MemoryRef::ProfileEntry(_) => {}
+                    }
+                }
+                let lines = if distilled.is_empty() {
+                    evidence
+                } else {
+                    distilled
+                };
+                if lines.is_empty() {
+                    None
+                } else {
+                    Some(lines.join("\n"))
+                }
+            }
+            Err(_) => None,
+        };
+        Ok((profile_context, memory_context))
+    });
+    match await_blocking(task, cancellation).await {
+        BlockingOutcome::Complete(result) => result,
+        BlockingOutcome::Failed(_) | BlockingOutcome::Cancelled => (None, None),
+    }
+}
+
 fn combined_context(
     about_user: Option<&str>,
     profile: Option<&str>,
@@ -2542,39 +2624,52 @@ async fn dispatch_assistant(
         return;
     }
     let cloud_memory_configured = state.lock().await.cloud_memory.is_some();
-    let profile = if cloud_memory_configured {
-        None
+    let (profile, memory_context) = if !cloud_memory_configured && memory_context.is_none() {
+        local_profile_and_memory_context(state, &text, cancellation).await
     } else {
-        local_profile_context(state, cancellation).await
-    };
-    let memory_context = match memory_context {
-        Some(context) => Some(context),
-        None if cloud_memory_configured => {
-            match cloud_memory_context(state, &text, LOCAL_MEMORY_CONTEXT_ITEMS, cancellation).await
-            {
-                Ok(items) => items.map(|items| {
-                    items
-                        .into_iter()
-                        .map(|item| format!("- {}", item.content))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                }),
-                Err(message) => {
-                    error(
-                        Some(request_id.to_owned()),
-                        "cloud_memory_recall_failed",
-                        &message,
-                        true,
-                    );
-                    return;
+        let profile = if cloud_memory_configured {
+            None
+        } else {
+            local_profile_context(state, cancellation).await
+        };
+        let memory_context = match memory_context {
+            Some(context) => Some(context),
+            None if cloud_memory_configured => {
+                match cloud_memory_context(state, &text, LOCAL_MEMORY_CONTEXT_ITEMS, cancellation).await
+                {
+                    Ok(items) => items.map(|items| {
+                        items
+                            .into_iter()
+                            .map(|item| format!("- {}", item.content))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    }),
+                    Err(message) => {
+                        error(
+                            Some(request_id.to_owned()),
+                            "cloud_memory_recall_failed",
+                            &message,
+                            true,
+                        );
+                        return;
+                    }
                 }
             }
-        }
-        None => local_memory_context(state, &text, cancellation).await,
+            None => local_memory_context(state, &text, cancellation).await,
+        };
+        (profile, memory_context)
     };
-    let user_profile = user_profile_path
-        .as_deref()
-        .and_then(crate::user_profile::read_user_profile);
+    let user_profile = match user_profile_path.as_deref() {
+        Some(path) => {
+            let path = path.clone();
+            let task = spawn_blocking(move || Ok(crate::user_profile::read_user_profile(&path)));
+            match await_blocking(task, cancellation).await {
+                BlockingOutcome::Complete(profile) => profile,
+                BlockingOutcome::Failed(_) | BlockingOutcome::Cancelled => None,
+            }
+        }
+        None => None,
+    };
     let about_user = user_profile
         .as_ref()
         .and_then(crate::user_profile::format_about_user);
@@ -5092,7 +5187,7 @@ async fn claim_computer_use_receipt(
         }
     }
     let risk = computer_use_risk_name(receipt.risk);
-    let request = reqwest::Client::new()
+    let request = shared_http_client()
         .post(endpoint)
         .bearer_auth(&receipt.receipt_token)
         .json(&ApprovalReceiptClaim {

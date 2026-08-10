@@ -126,7 +126,8 @@ impl ChatRouter {
         if SEARCH_MARKERS.iter().any(|marker| lowered.contains(marker)) {
             return ModelTier::Search;
         }
-        if likely_needs_tools(prompt, origin) {
+        let needs_tools = likely_needs_tools(prompt, origin, Some(&lowered));
+        if needs_tools {
             return ModelTier::Smart;
         }
         if VISION_MARKERS.iter().any(|marker| lowered.contains(marker)) {
@@ -138,7 +139,7 @@ impl ChatRouter {
         {
             return ModelTier::Multimodal;
         }
-        if !likely_needs_tools(prompt, origin)
+        if !needs_tools
             && is_short_simple(prompt)
             && !HEAVY_KEYWORDS
                 .iter()
@@ -197,12 +198,21 @@ impl ChatRouter {
     }
 }
 
-fn likely_needs_tools(prompt: &str, origin: Option<MessageOrigin>) -> bool {
+fn likely_needs_tools(
+    prompt: &str,
+    origin: Option<MessageOrigin>,
+    lowered: Option<&str>,
+) -> bool {
     if matches!(origin, Some(MessageOrigin::Overlay)) {
         return true;
     }
-    let lowered = prompt.to_lowercase();
-    TOOL_MARKERS.iter().any(|marker| lowered.contains(marker))
+    match lowered {
+        Some(lowered) => TOOL_MARKERS.iter().any(|marker| lowered.contains(marker)),
+        None => {
+            let lowered = prompt.to_lowercase();
+            TOOL_MARKERS.iter().any(|marker| lowered.contains(marker))
+        }
+    }
 }
 
 fn is_short_simple(prompt: &str) -> bool {

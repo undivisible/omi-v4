@@ -4,6 +4,7 @@ use crate::signals::{AudioEncoding, TranscriptDelta, TranscriptGap, Transcriptio
 use crate::signals::{NativeError, NativeEvent, TranscriptionState, TranscriptionStatus};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::{
     Arc,
@@ -226,13 +227,18 @@ enum SttControl {
 
 impl SttHandle {
     pub(crate) fn send_audio(&self, bytes: &[u8]) -> Result<(), SttError> {
+        self.send_audio_owned(bytes.to_vec())
+    }
+
+    pub(crate) fn send_audio_owned(&self, bytes: Vec<u8>) -> Result<(), SttError> {
         let Some(sender) = &self.audio_sender else {
             return Ok(());
         };
+        let byte_len = bytes.len();
         let mut current = self.pending_audio_bytes.load(Ordering::Acquire);
         loop {
             let next = current
-                .checked_add(bytes.len())
+                .checked_add(byte_len)
                 .filter(|value| *value <= MAX_PENDING_AUDIO_BYTES)
                 .ok_or(SttError::ConnectionFailed)?;
             match self.pending_audio_bytes.compare_exchange_weak(
@@ -245,12 +251,10 @@ impl SttHandle {
                 Err(observed) => current = observed,
             }
         }
-        let result = sender
-            .try_send(bytes.to_vec())
-            .map_err(|_| SttError::ConnectionFailed);
+        let result = sender.try_send(bytes).map_err(|_| SttError::ConnectionFailed);
         if result.is_err() {
             self.pending_audio_bytes
-                .fetch_sub(bytes.len(), Ordering::AcqRel);
+                .fetch_sub(byte_len, Ordering::AcqRel);
         }
         result
     }
@@ -307,7 +311,7 @@ pub(crate) fn spawn(
 
 #[derive(Default)]
 struct ReconnectAudioBuffer {
-    frames: Vec<Vec<u8>>,
+    frames: VecDeque<Vec<u8>>,
     bytes: usize,
 }
 
@@ -316,9 +320,9 @@ impl ReconnectAudioBuffer {
         let len = frame.len();
         while self.bytes.saturating_add(len) > MAX_RECONNECT_BUFFER_BYTES && !self.frames.is_empty()
         {
-            if let Some(old) = self.frames.first() {
+            if let Some(old) = self.frames.front() {
                 self.bytes -= old.len();
-                self.frames.remove(0);
+                self.frames.pop_front();
             }
         }
         if self.bytes.saturating_add(len) <= MAX_RECONNECT_BUFFER_BYTES {
@@ -334,11 +338,10 @@ impl ReconnectAudioBuffer {
         config: &SttConfig,
         epoch: u32,
     ) -> bool {
-        while !self.frames.is_empty() {
-            let bytes = self.frames.remove(0);
+        while let Some(bytes) = self.frames.pop_front() {
             self.bytes -= bytes.len();
             crate::speech_recognition::observe_stream_audio(config, epoch, &bytes);
-            let encoded = encode_audio(&bytes, config.encoding);
+            let encoded = encode_audio(bytes, config.encoding);
             if socket.send(Message::Binary(encoded.into())).await.is_err() {
                 return false;
             }
@@ -400,7 +403,7 @@ async fn run(
                     while let Ok(bytes) = audio_receiver.try_recv() {
                         pending_audio_bytes.fetch_sub(bytes.len(), Ordering::AcqRel);
                         crate::speech_recognition::observe_stream_audio(&config, state.epoch, &bytes);
-                        let encoded = encode_audio(&bytes, config.encoding);
+                        let encoded = encode_audio(bytes, config.encoding);
                         if socket.send(Message::Binary(encoded.into())).await.is_err() {
                             terminal_error(
                                 &config,
@@ -434,7 +437,7 @@ async fn run(
             command = audio_receiver.recv() => if let Some(bytes) = command {
                     pending_audio_bytes.fetch_sub(bytes.len(), Ordering::AcqRel);
                     crate::speech_recognition::observe_stream_audio(&config, state.epoch, &bytes);
-                    let encoded = encode_audio(&bytes, config.encoding);
+                    let encoded = encode_audio(bytes, config.encoding);
                     if socket.send(Message::Binary(encoded.into())).await.is_err() {
                         let now = unix_time_ms();
                         NativeEvent::TranscriptGap(state.reconnect_gap(now, now)).send();
@@ -702,9 +705,9 @@ fn terminal_error(config: &SttConfig, code: &str, message: &str, epoch: u32) {
     terminal_status(config, TranscriptionState::Failed, epoch);
 }
 
-fn encode_audio(bytes: &[u8], encoding: AudioEncoding) -> Vec<u8> {
+fn encode_audio(bytes: Vec<u8>, encoding: AudioEncoding) -> Vec<u8> {
     if encoding != AudioEncoding::PcmU8 {
-        return bytes.to_vec();
+        return bytes;
     }
     let mut output = Vec::with_capacity(bytes.len().saturating_mul(2));
     for sample in bytes {
@@ -960,8 +963,7 @@ mod tests {
         }
 
         let replayed: Vec<Vec<u8>> =
-            std::iter::from_fn(|| (!buffer.frames.is_empty()).then(|| buffer.frames.remove(0)))
-                .collect();
+            std::iter::from_fn(|| buffer.frames.pop_front()).collect();
 
         assert_eq!(
             replayed,
@@ -1168,10 +1170,19 @@ mod tests {
             Some("pcm".to_owned())
         );
         assert_eq!(
-            encode_audio(&[0, 128, 255], AudioEncoding::PcmU8),
+            encode_audio(vec![0, 128, 255], AudioEncoding::PcmU8),
             [0, 128, 0, 0, 0, 127]
         );
-        assert_eq!(encode_audio(&[1, 2], AudioEncoding::PcmS16Le), [1, 2]);
+        assert_eq!(encode_audio(vec![1, 2], AudioEncoding::PcmS16Le), [1, 2]);
+    }
+
+    #[test]
+    fn encode_audio_pcm_s16le_returns_same_length_without_conversion() {
+        let bytes = vec![1, 2, 3, 4];
+        let len = bytes.len();
+        let out = encode_audio(bytes, AudioEncoding::PcmS16Le);
+        assert_eq!(out.len(), len);
+        assert_eq!(out, [1, 2, 3, 4]);
     }
 
     #[test]

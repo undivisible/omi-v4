@@ -663,7 +663,7 @@ mod platform {
             if mono.is_empty() {
                 continue;
             }
-            match stt.send_audio(&pcm_bytes(&mono)) {
+            match stt.send_audio_owned(pcm_bytes(&mono)) {
                 Ok(()) => failing_since = None,
                 Err(_) => {
                     let since = *failing_since.get_or_insert_with(Instant::now);
@@ -930,7 +930,7 @@ mod platform {
             if mono.is_empty() {
                 continue;
             }
-            match stt.send_audio(&pcm_bytes(&mono)) {
+            match stt.send_audio_owned(pcm_bytes(&mono)) {
                 Ok(()) => failing_since = None,
                 Err(_) => {
                     let since = *failing_since.get_or_insert_with(Instant::now);
