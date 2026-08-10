@@ -614,9 +614,6 @@ pub struct UsageTail {
 impl UsageTail {
     pub fn push(&mut self, chunk: &[u8]) {
         self.remainder.extend_from_slice(chunk);
-        if self.remainder.len() > 16_384 {
-            self.remainder.drain(..self.remainder.len() - 16_384);
-        }
         let mut split_at = 0usize;
         for (index, &byte) in self.remainder.iter().enumerate() {
             if byte == b'\n' {
@@ -628,6 +625,9 @@ impl UsageTail {
         }
         if split_at > 0 {
             self.remainder.drain(..split_at);
+        }
+        if self.remainder.len() > 16_384 {
+            self.remainder.drain(..self.remainder.len() - 16_384);
         }
     }
 

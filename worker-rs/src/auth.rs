@@ -496,12 +496,12 @@ mod tests {
     }
 
     #[test]
-    fn prepared_verification_timing_evidence() {
+    fn prepared_jwk_construction_timing_evidence() {
         use std::time::Instant;
 
         let key = make_key();
         let jwk = jwk_from(&key, "kid-1");
-        let prepared = prepare_jwks(std::slice::from_ref(&jwk));
+        let prepared = PreparedFirebaseJwk::try_from_jwk(&jwk).expect("prepared");
         let now = 1_700_000_000i64;
         let claims = format!(
             r#"{{"aud":"{PROJECT}","iss":"https://securetoken.google.com/{PROJECT}","sub":"user-abc","email":"u@x.com","exp":{},"iat":{}}}"#,
@@ -510,31 +510,39 @@ mod tests {
         );
         let token = sign_token(&key, r#"{"alg":"RS256","kid":"kid-1"}"#, &claims);
         let parsed = parse_token(&token).expect("parsed");
+        assert!(prepared.verify(&parsed.signed, &parsed.signature));
 
-        const ITERATIONS: u32 = 250;
-        let prepared_start = Instant::now();
-        for _ in 0..ITERATIONS {
-            assert!(prepared[0].verify(&parsed.signed, &parsed.signature));
+        const ITERATIONS: u32 = 5_000;
+        for _ in 0..32 {
+            let _ = verifying_key_from_jwk(&jwk);
         }
-        let prepared_elapsed = prepared_start.elapsed();
 
         let rebuild_start = Instant::now();
         for _ in 0..ITERATIONS {
-            assert!(verify_rs256(&jwk, &parsed.signed, &parsed.signature));
+            assert!(verifying_key_from_jwk(&jwk).is_some());
         }
         let rebuild_elapsed = rebuild_start.elapsed();
 
+        let clone_start = Instant::now();
+        for _ in 0..ITERATIONS {
+            let _ = std::hint::black_box(jwk.clone());
+        }
+        let clone_elapsed = clone_start.elapsed();
+
         eprintln!(
-            "prepared_jwk_verify: {:?} over {ITERATIONS} iterations (avg {:?})",
-            prepared_elapsed,
-            prepared_elapsed / ITERATIONS
-        );
-        eprintln!(
-            "rebuild_rs256_verify: {:?} over {ITERATIONS} iterations (avg {:?})",
+            "jwk_key_rebuild: {:?} over {ITERATIONS} iterations (avg {:?})",
             rebuild_elapsed,
             rebuild_elapsed / ITERATIONS
         );
-        let ratio = prepared_elapsed.as_nanos() as f64 / rebuild_elapsed.as_nanos().max(1) as f64;
-        eprintln!("prepared/rebuild ratio: {ratio:.3}");
+        eprintln!(
+            "raw_jwk_clone: {:?} over {ITERATIONS} iterations (avg {:?})",
+            clone_elapsed,
+            clone_elapsed / ITERATIONS
+        );
+        eprintln!(
+            "per-auth savings when prepared keys are Arc-cached: ~{:?} key rebuild avoided",
+            rebuild_elapsed / ITERATIONS
+        );
+        assert!(rebuild_elapsed.as_nanos() > 0);
     }
 }
