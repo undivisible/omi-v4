@@ -153,7 +153,6 @@ jobs:
           FIREBASE_WEB_APP_ID: ${{ secrets.FIREBASE_WEB_APP_ID }}
         run: |
           set -euo pipefail
-          defines=""
           missing=""
           for name in FIREBASE_PROJECT_ID FIREBASE_AUTH_DOMAIN FIREBASE_API_KEY \
                       FIREBASE_APP_ID FIREBASE_ANDROID_API_KEY FIREBASE_ANDROID_APP_ID \
@@ -164,23 +163,44 @@ jobs:
             if [ -z "${value}" ]; then
               missing="${missing} ${name}"
             else
-              defines="${defines} --dart-define=${name}=${value}"
+              echo "::add-mask::${value}"
             fi
           done
           if [ -n "${missing}" ]; then
             echo "::error::Release builds cannot sign in without these repository secrets:${missing}"
             exit 1
           fi
-          echo "defines=${defines# }" >> "$GITHUB_OUTPUT"
 
       - name: Build the macOS release app
         working-directory: app
         env:
           SIGN: ${{ steps.signing.outputs.sign }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_ANDROID_API_KEY: ${{ secrets.FIREBASE_ANDROID_API_KEY }}
+          FIREBASE_ANDROID_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          FIREBASE_IOS_API_KEY: ${{ secrets.FIREBASE_IOS_API_KEY }}
+          FIREBASE_IOS_APP_ID: ${{ secrets.FIREBASE_IOS_APP_ID }}
+          FIREBASE_MACOS_API_KEY: ${{ secrets.FIREBASE_MACOS_API_KEY }}
+          FIREBASE_MACOS_APP_ID: ${{ secrets.FIREBASE_MACOS_APP_ID }}
+          FIREBASE_WINDOWS_API_KEY: ${{ secrets.FIREBASE_WINDOWS_API_KEY }}
+          FIREBASE_WINDOWS_APP_ID: ${{ secrets.FIREBASE_WINDOWS_APP_ID }}
+          FIREBASE_WEB_API_KEY: ${{ secrets.FIREBASE_WEB_API_KEY }}
+          FIREBASE_WEB_APP_ID: ${{ secrets.FIREBASE_WEB_APP_ID }}
         run: |
           set -euo pipefail
           mkdir -p build/macos/SourcePackages
           flutter pub get
+          defines=()
+          for name in FIREBASE_PROJECT_ID FIREBASE_AUTH_DOMAIN FIREBASE_API_KEY \
+                      FIREBASE_APP_ID FIREBASE_ANDROID_API_KEY FIREBASE_ANDROID_APP_ID \
+                      FIREBASE_IOS_API_KEY FIREBASE_IOS_APP_ID FIREBASE_MACOS_API_KEY \
+                      FIREBASE_MACOS_APP_ID FIREBASE_WINDOWS_API_KEY \
+                      FIREBASE_WINDOWS_APP_ID FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID; do
+            defines+=("--dart-define=${name}=${!name}")
+          done
           if [ "${SIGN}" != "true" ]; then
             xcconfig="${RUNNER_TEMP}/unsigned.xcconfig"
             {
@@ -195,7 +215,7 @@ jobs:
             cat "${xcconfig}"
             export XCODE_XCCONFIG_FILE="${xcconfig}"
           fi
-          flutter build macos --release ${{ steps.firebase.outputs.defines }}
+          flutter build macos --release "${defines[@]}"
 
       - name: Locate the built app bundle
         id: bundle

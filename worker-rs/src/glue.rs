@@ -2022,6 +2022,28 @@ async fn handle_channel_exchange(mut req: Request, ctx: RouteContext<()>) -> Res
     let Some(secret) = worker_session_secret(&ctx) else {
         return opaque_auth_failure();
     };
+    let client_ip = {
+        let ip = header(&req, "cf-connecting-ip");
+        if ip.is_empty() {
+            "unknown".to_string()
+        } else {
+            ip
+        }
+    };
+    let (allowed, retry_after) = crate::routes_ai::consume_rate_limit(
+        &ctx.env,
+        &crate::channel_auth::per_ip_key(&client_ip),
+        crate::channel_auth::EXCHANGE_PER_IP_LIMIT,
+        crate::channel_auth::EXCHANGE_PER_IP_WINDOW_MS,
+    )
+    .await;
+    if !allowed {
+        let headers = worker::Headers::new();
+        headers.set("retry-after", &retry_after.to_string())?;
+        return Ok(Response::from_json(&json!({ "error": "Too many attempts" }))?
+            .with_status(429)
+            .with_headers(headers));
+    }
     let body = json_object(&mut req).await;
     let Some(code) = body
         .as_ref()
@@ -2069,10 +2091,41 @@ async fn handle_channel_exchange(mut req: Request, ctx: RouteContext<()>) -> Res
             }),
         bound_uid: row_str(value, "bound_uid"),
     });
-    let crate::channel_auth::ExchangeDecision::Accept { uid, is_new } =
-        crate::channel_auth::decide(stored.as_ref(), now)
-    else {
-        return opaque_auth_failure();
+    let (uid, is_new) = match crate::channel_auth::decide(stored.as_ref(), now) {
+        crate::channel_auth::ExchangeDecision::Accept { uid, is_new } => (uid, is_new),
+        crate::channel_auth::ExchangeDecision::Reject(reason) => {
+            if crate::channel_auth::counts_against_global_budget(reason) {
+                let (allowed, retry_after) = crate::routes_ai::consume_rate_limit(
+                    &ctx.env,
+                    crate::channel_auth::global_failure_key(),
+                    crate::channel_auth::EXCHANGE_GLOBAL_FAILURE_LIMIT,
+                    crate::channel_auth::EXCHANGE_GLOBAL_FAILURE_WINDOW_MS,
+                )
+                .await;
+                if !allowed {
+                    let headers = worker::Headers::new();
+                    headers.set("retry-after", &retry_after.to_string())?;
+                    return Ok(Response::from_json(&json!({ "error": "Too many attempts" }))?
+                        .with_status(429)
+                        .with_headers(headers));
+                }
+            }
+            if crate::channel_auth::burns_code_attempt(reason) {
+                if let Ok(statement) = db
+                    .prepare(
+                        "UPDATE channel_link_codes\n                         SET attempts = attempts + 1,\n                             locked_at = CASE WHEN attempts + 1 >= ?2 THEN ?3 ELSE locked_at END\n                         WHERE code_hash = ?1 AND locked_at IS NULL AND attempts < ?2",
+                    )
+                    .bind(&[
+                        js_str(&code_hash),
+                        (crate::channel_auth::MAX_CODE_ATTEMPTS as f64).into(),
+                        (now as f64).into(),
+                    ])
+                {
+                    let _ = statement.run().await;
+                }
+            }
+            return opaque_auth_failure();
+        }
     };
     let Some(row) = row else {
         return opaque_auth_failure();

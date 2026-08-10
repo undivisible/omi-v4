@@ -224,6 +224,7 @@ impl CaptureWal {
             ));
         }
         fs::create_dir_all(&directory)?;
+        restrict_directory_permissions(&directory);
         let mut next_sequence = 0_u64;
         for entry in fs::read_dir(&directory)? {
             let Ok(entry) = entry else { continue };
@@ -318,6 +319,7 @@ impl CaptureWal {
             .truncate(true)
             .write(true)
             .open(&path)?;
+        restrict_file_permissions(&path);
         // Durability is the whole point: a header still sitting in a user-space
         // buffer when the process dies leaves an unreadable segment behind.
         file.write_all(line.as_bytes())?;
@@ -564,6 +566,24 @@ fn sequence_of(name: &str) -> Option<u64> {
     }
     name.get(..SEQUENCE_DIGITS)?.parse().ok()
 }
+
+#[cfg(unix)]
+fn restrict_directory_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(not(unix))]
+fn restrict_directory_permissions(_path: &Path) {}
+
+#[cfg(unix)]
+fn restrict_file_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn restrict_file_permissions(_path: &Path) {}
 
 /// Sixteen cryptographically random bytes, lowercase hex — the same shape the
 /// Dart log minted, and inside the `[A-Za-z0-9._:-]{8,120}` the transcription

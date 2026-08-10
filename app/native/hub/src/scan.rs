@@ -81,13 +81,23 @@ pub fn scan_sources(roots: &[String], notes: bool, mail: bool) -> Vec<SourceScan
     }
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         let now = crate::evidence::now_unix_seconds();
-        let root_paths = roots.iter().map(PathBuf::from).collect::<Vec<_>>();
+        let root_paths = approved_workspace_roots(roots);
         results.push(crate::evidence::scan_apps(&home, now));
         results.push(crate::evidence::scan_developer_activity(&home, now));
         results.push(crate::evidence::scan_browsing(&home, now));
         results.push(crate::evidence::scan_documents(&root_paths, &home, now));
     }
     results
+}
+
+fn approved_workspace_roots(roots: &[String]) -> Vec<PathBuf> {
+    roots
+        .iter()
+        .map(PathBuf::from)
+        .filter(|path| {
+            path.is_absolute() && !path.components().any(|part| part == Component::ParentDir)
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -390,21 +400,17 @@ pub fn detected_languages(scans: &[SourceScan]) -> Vec<String> {
 }
 
 fn scan_workspace(roots: &[String]) -> SourceScan {
-    let paths = match roots
-        .iter()
-        .map(|root| {
-            let path = PathBuf::from(root);
-            if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
-                Err("Approved workspace roots must be absolute and cannot contain '..'.".to_owned())
-            } else {
-                Ok(path)
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(paths) => paths,
-        Err(error) => return result("workspace", ScanState::Failed, error),
-    };
+    if roots.iter().any(|root| {
+        let path = PathBuf::from(root);
+        !path.is_absolute() || path.components().any(|part| part == Component::ParentDir)
+    }) {
+        return result(
+            "workspace",
+            ScanState::Failed,
+            "Approved workspace roots must be absolute and cannot contain '..'.".to_owned(),
+        );
+    }
+    let paths = approved_workspace_roots(roots);
     if paths.is_empty() {
         return result(
             "workspace",
@@ -970,6 +976,16 @@ mod tests {
         assert_eq!(
             scan_workspace(&["/tmp/../etc".into()]).state,
             ScanState::Failed
+        );
+    }
+
+    #[test]
+    fn document_scan_roots_reject_parent_escape() {
+        assert!(approved_workspace_roots(&["/tmp/../etc".into()]).is_empty());
+        assert!(approved_workspace_roots(&["Documents".into()]).is_empty());
+        assert_eq!(
+            approved_workspace_roots(&["/tmp/omi-docs".into()]),
+            vec![PathBuf::from("/tmp/omi-docs")]
         );
     }
 

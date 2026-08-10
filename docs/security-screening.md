@@ -98,19 +98,20 @@ open would make a classifier outage the cheapest way to bypass the screen.
 | --- | --- | --- |
 | `dangerous` | off | run without asking |
 | `auto` (**default**) | external content is screened | run without asking |
-| `strict` | off — everything is already gated | every effectful tool waits for the user |
+| `strict` | external content is screened | every effectful tool waits for the user |
 
 Unset or unparseable values fall back to `auto`. The postures are ordered, and
 `compose_security_posture` is monotonic: a narrower scope — a single turn, a
 single surface — may raise the posture above the floor but can never lower it.
-That is how a strict verdict works. The screen does not rewrite content or
-refuse the turn; it tightens the turn's posture, and the resolved policy is
-rendered into the prompt by `render_security_policy_prompt` (see
-[`docs/system-prompts.md`](system-prompts.md)).
+That is how a strict verdict works. Raising the posture never turns screening
+off: `strict` keeps inbound screening on and adds universal tool approvals. The
+screen does not rewrite content or refuse the turn; it tightens the turn's
+posture, and the resolved policy is rendered into the prompt by
+`render_security_policy_prompt` (see [`docs/system-prompts.md`](system-prompts.md)).
 
 Screening only runs when the resolved policy asks for it, so `dangerous` skips
-the classifier entirely and `strict` does not pay for it either — under strict
-every effectful tool is already waiting for a human.
+the classifier entirely. `auto` and `strict` both screen external content;
+`strict` additionally makes every effectful tool wait for a human.
 
 ## Shadow mode
 

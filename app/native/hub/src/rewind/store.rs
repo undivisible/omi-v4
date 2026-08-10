@@ -85,6 +85,7 @@ impl Store {
         }
         self.loaded = true;
         let _ = fs::create_dir_all(&self.root);
+        restrict_directory_permissions(&self.root);
         let Ok(file) = File::open(self.index_file()) else {
             return;
         };
@@ -122,8 +123,10 @@ impl Store {
         let path = self.root.join(&relative);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
+            restrict_directory_permissions(parent);
         }
         fs::write(&path, jpeg)?;
+        restrict_file_permissions(&path);
         let frame = Frame {
             captured_at_ms,
             relative_path: relative,
@@ -262,10 +265,12 @@ impl Store {
     }
 
     fn append_index(&self, frame: &Frame) -> std::io::Result<()> {
+        let index = self.index_file();
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(self.index_file())?;
+            .open(&index)?;
+        restrict_file_permissions(&index);
         writeln!(file, "{}", frame.to_json())?;
         file.flush()
     }
@@ -276,7 +281,10 @@ impl Store {
             buffer.push_str(&frame.to_json().to_string());
             buffer.push('\n');
         }
-        fs::write(self.index_file(), buffer)
+        let index = self.index_file();
+        fs::write(&index, buffer)?;
+        restrict_file_permissions(&index);
+        Ok(())
     }
 
     fn prune_empty_days(&self) {
@@ -308,6 +316,24 @@ fn safe_display_id(id: &str) -> String {
         value
     }
 }
+
+#[cfg(unix)]
+fn restrict_directory_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(not(unix))]
+fn restrict_directory_permissions(_path: &Path) {}
+
+#[cfg(unix)]
+fn restrict_file_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn restrict_file_permissions(_path: &Path) {}
 
 /// Frames are filed by local calendar day, which is how a person looks for
 /// them; the row inside the index still carries the exact UTC instant.

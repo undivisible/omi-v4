@@ -12,7 +12,20 @@ import 'package:path_provider/path_provider.dart';
 Future<Directory> omiDataDirectory() async {
   final directory = Directory(await _omiRootPath());
   await directory.create(recursive: true);
+  await _restrictOwnerAccess(directory);
   return directory;
+}
+
+Future<void> _restrictOwnerAccess(Directory directory) async {
+  if (kIsWeb) {
+    return;
+  }
+  if (!(Platform.isMacOS || Platform.isLinux)) {
+    return;
+  }
+  try {
+    await Process.run('chmod', ['700', directory.path]);
+  } catch (_) {}
 }
 
 Future<String> _omiRootPath() async {
