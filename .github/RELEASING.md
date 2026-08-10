@@ -5,7 +5,7 @@ own workflow; tagging one stream never builds the others.
 
 | Stream | Tag pattern | Workflow | Runs on |
 | --- | --- | --- | --- |
-| Firmware | `firmware-v*` | [`workflows/release-firmware.yml`](workflows/release-firmware.yml) | `ubuntu-24.04` inside `ghcr.io/nrfconnect/sdk-nrf-toolchain:v2.9.0` |
+| Firmware | `firmware-v*` | [`workflows/release-firmware.yml`](workflows/release-firmware.yml) | `ubuntu-24.04` inside `ghcr.io/nrfconnect/sdk-nrf-toolchain` (NCS **v3.4.0**, digest-pinned in the workflow) |
 | Mobile | `mobile-v*` | [`workflows/release-mobile.yml`](workflows/release-mobile.yml) | `ubuntu-24.04` (Android) and `macos-15` (iOS) |
 | Desktop | `desktop-v*` | [`workflows/release-desktop.yml`](workflows/release-desktop.yml) | `macos-15` |
 
@@ -59,19 +59,40 @@ gh workflow run release-mobile.yml   -f version=dev -f dry_run=true
 gh workflow run release-desktop.yml  -f version=dev -f dry_run=true
 ```
 
-Setting `dry_run=false` on a manual run publishes a release against whatever ref the run
-was dispatched from, so only do that deliberately. Tag pushes always run with
-`dry_run=false`.
+Setting `dry_run=false` on a branch `workflow_dispatch` is rejected: publishing is only
+allowed from a matching stream tag push (so a branch name cannot become a GitHub Release).
+Tag pushes always run with `dry_run=false`.
 
 ## Secrets
 
-No secret is required to get a build out of any stream. Every signing step checks its
-secrets first and, when they are missing, prints a `::notice::` and produces an unsigned
-artifact instead of failing. Forks therefore still get usable downloads.
+Signing secrets are optional: every signing step checks them first and, when they are
+missing, prints a `::notice::` and produces an unsigned artifact instead of failing.
+Forks therefore still get usable **unsigned** downloads from dry runs.
+
+Mobile and desktop release builds **do** require the Firebase `FIREBASE_*` repository
+secrets listed below; without them the job fails before packaging so an
+`UnconfiguredAuthGateway` binary cannot ship. Firmware needs nothing beyond
+`GITHUB_TOKEN`.
 
 ### Firmware — no secrets
 
 The firmware stream needs nothing beyond the default `GITHUB_TOKEN`.
+
+### Firebase (required for mobile and desktop releases)
+
+These secrets are hard-required by the mobile and desktop release workflows. Missing any
+one fails the job with `::error::` before the app is packaged:
+
+| Secret | Used for |
+| --- | --- |
+| `FIREBASE_PROJECT_ID` | `--dart-define` auth/config |
+| `FIREBASE_AUTH_DOMAIN` | `--dart-define` auth/config |
+| `FIREBASE_API_KEY` / `FIREBASE_APP_ID` | Default / shared Firebase app |
+| `FIREBASE_ANDROID_API_KEY` / `FIREBASE_ANDROID_APP_ID` | Android |
+| `FIREBASE_IOS_API_KEY` / `FIREBASE_IOS_APP_ID` | iOS |
+| `FIREBASE_MACOS_API_KEY` / `FIREBASE_MACOS_APP_ID` | macOS |
+| `FIREBASE_WINDOWS_API_KEY` / `FIREBASE_WINDOWS_APP_ID` | Windows |
+| `FIREBASE_WEB_API_KEY` / `FIREBASE_WEB_APP_ID` | Web |
 
 ### Mobile
 
@@ -246,26 +267,24 @@ into the new firmware once the copy completes.
 
 ## Caching
 
-- Flutter SDK and pub cache — `subosito/flutter-action@v2` with `cache: true`, plus
-  `~/.pub-cache` in the `actions/cache@v4` entries.
+- Flutter SDK and pub cache — `subosito/flutter-action` with `cache: true`, plus
+  `~/.pub-cache` in the release `actions/cache` entries.
 - Gradle — `~/.gradle/caches` and `~/.gradle/wrapper`, keyed on the Gradle files.
-- Cargo — `~/.cargo/registry`, `~/.cargo/git` and `app/native/hub/target`, keyed on
-  `Cargo.toml`.
+- Cargo — release caches key on `Cargo.lock` (plus pub/Podfile locks); root CI uses
+  `Swatinem/rust-cache` for hub/worker jobs.
 - CocoaPods — `~/Library/Caches/CocoaPods`, keyed on `Podfile.lock`.
-- nRF Connect SDK — **not cached.** A full `/opt/ncs` west workspace is several gigabytes
-  and would sit close to GitHub's 10 GB per-repository cache limit, where a save either
-  fails or evicts every other cache in the repository. Every firmware job therefore does a
-  cold `west init` + `west update`, narrowed as much as is safe:
+- nRF Connect SDK —
+  - **`ci-firmware.yml` caches** `/opt/ncs` once in a `workspace` job and restores it
+    read-only into every matrix leg (key includes NCS version, `RUST_MODULE_REV`, and the
+    zephyr-lang-rust parent-disabled patch hash).
+  - **`release-firmware.yml` still cold-clones** with a narrowed `west update` per matrix
+    leg today (same filter as CI). Sharing the CI cache with release is a follow-up once
+    cache size under the 10 GB repo limit is confirmed on a real release dry run:
 
   ```sh
   west config manifest.group-filter -- -babblesim,-ci,-optional,-debug
   west update --narrow -o=--depth=1
   ```
-
-  That is roughly 5–15 minutes per matrix job. If you want the cache back, add an
-  `actions/cache@v4` step around `${{ env.NCS_WORKSPACE }}` and prune `.git`, `doc/`,
-  `tests/` and `samples/` before the save so the archive stays well under the limit —
-  do not cache the workspace as-is.
 
 ## Toolchain resolution inside the NCS container
 
@@ -292,23 +311,14 @@ image layout produces a diagnosis rather than a mystery.
 
 ## Known rough edges
 
-**None of these workflows has ever been executed.** They are YAML-valid and `actionlint`-clean,
-the discovery script is unit-tested locally against synthetic firmware trees, and the shell
-is `shellcheck`-clean, but no GitHub Actions run has confirmed any of it. Use a dry run
-(above) before trusting a tag push. Specifically still unverified:
+Firmware CI and release paths have been exercised on GitHub Actions (see concrete run IDs
+in [`firmware/README.md`](../firmware/README.md)). Prefer a dry run before trusting a new
+tag push. Remaining caveats:
 
-- Whether `nrfutil toolchain-manager env --as-script` exists and behaves as expected in
-  `sdk-nrf-toolchain:v2.9.0`, and whether the fallback searches then find a usable toolchain.
-- Whether the cold `west update` with the narrowed group filter still pulls every module
-  the Omi applications need, and how long it actually takes.
-- Whether the discovered board strings and cmake arguments match what the vendored
-  `firmware/` tree really wants — `firmware/` is not on `main` yet, so the discovery
-  script has only been exercised against synthetic trees.
-- Whether the Gradle `signingConfigs.release` resolves in the Flutter Android build on CI
-  (no JDK was available locally to evaluate the build script).
-- Whether `signingStyle: automatic` exports cleanly for the configured provisioning
-  profile, and whether notarization of the macOS app and DMG succeeds.
-- macOS `flutter build macos --release` runs with the project's automatic signing and a
-  `DEVELOPMENT_TEAM` set; if the build itself fails on a runner without a certificate,
-  the fix is to make the Xcode project fall back to ad-hoc signing rather than to change
-  this workflow.
+- Release firmware still cold-clones NCS per matrix leg (CI already caches `/opt/ncs`).
+- Mobile/desktop tag publishes can still emit **unsigned** artifacts when signing secrets
+  are incomplete (intentional for forks; tighten only if you want tag pushes to require
+  signing).
+- Notarization of the macOS app/DMG still depends on the Apple ID secrets being present.
+- `signingStyle: automatic` must match the Xcode project; set `IOS_SIGNING_STYLE=manual`
+  only when the project and provisioning profile mapping match.

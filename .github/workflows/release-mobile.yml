@@ -45,6 +45,10 @@ jobs:
             version="${INPUT_VERSION:-dev}"
             dry_run="${INPUT_DRY_RUN:-true}"
           fi
+          if [ "${dry_run}" = "false" ] && [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "::error::Publishing is only allowed from stream tag pushes (dry_run=false on a branch would create a release named after the branch). Use dry_run=true for workflow_dispatch, or push a matching tag."
+            exit 1
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
           echo "Mobile release version: ${version}"
