@@ -99,6 +99,12 @@ jobs:
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Verify fixed stable Bun runtime
+        run: >-
+          bun -e 'if (Bun.version !== "1.4.4" || Bun.revision !== "38afee6c84fcf48c0edb2466aa4b27d287a59c30") throw new Error("Install the pinned stable Bun release")'
+
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings

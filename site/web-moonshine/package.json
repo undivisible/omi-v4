@@ -35,5 +35,8 @@
     "@types/react-dom": "^19.1.0",
     "typescript": "7.0.2",
     "unocss": "^66.7.5"
+  },
+  "engines": {
+    "bun": ">=1.4.4"
   }
 }
