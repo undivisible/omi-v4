@@ -211,7 +211,7 @@ pub(crate) mod wasm_glue {
     use worker::{D1Database, Env, Result};
 
     use crate::cron_cursor::scan_onboarded_users;
-    use crate::routes_memory::wasm_glue::{d1_all, d1_run, n, s, stmt, str_field};
+    use crate::routes_memory::wasm_glue::{d1_all, n, s, stmt, str_field};
     use crate::worker_util::{changes, now_ms, uuid_v4};
 
     use super::*;
@@ -283,7 +283,8 @@ pub(crate) mod wasm_glue {
         now: i64,
     ) -> Result<bool> {
         let id = uuid_v4();
-        let inserted = d1_run(
+        let mut statements = Vec::with_capacity(digest.citations.len() + 2);
+        statements.push(stmt(
             db,
             "INSERT OR IGNORE INTO memory_daily_reviews\n               (id, uid, local_date, input_revision, body, kind, created_at, updated_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
             &[
@@ -295,27 +296,22 @@ pub(crate) mod wasm_glue {
                 s(kind.as_str()),
                 n(now),
             ],
-        )
-        .await?;
-        if changes(&inserted) != 1 {
-            return Ok(false);
-        }
-        let mut statements = Vec::with_capacity(digest.citations.len() + 1);
+        )?);
         for evidence_id in &digest.citations {
             statements.push(stmt(
                 db,
-                "INSERT OR IGNORE INTO memory_daily_review_citations (uid, review_id, evidence_id)\n                 SELECT ?1, ?2, e.id FROM memory_evidence e\n                 WHERE e.id = ?3 AND e.uid = ?1",
+                "INSERT OR IGNORE INTO memory_daily_review_citations (uid, review_id, evidence_id)\n                 SELECT ?1, r.id, e.id FROM memory_evidence e\n                 JOIN memory_daily_reviews r ON r.id = ?2 AND r.uid = ?1\n                 WHERE e.id = ?3 AND e.uid = ?1",
                 &[s(uid), s(&id), s(evidence_id)],
             )?);
         }
         let delivery = delivery_id(kind, uid, local_date);
         statements.push(stmt(
             db,
-            "INSERT OR IGNORE INTO channel_deliveries\n                 (id, uid, channel, idempotency_key, channel_chat_id, text, next_attempt_at, created_at, updated_at)\n               SELECT ?1, b.uid, b.channel, ?2, COALESCE(b.channel_chat_id, b.channel_user_id), ?3, ?4, ?4, ?4\n               FROM channel_bindings b\n               WHERE b.uid = ?5 AND b.revoked_at IS NULL\n               ORDER BY b.verified_at DESC LIMIT 1",
-            &[s(&delivery), s(&delivery), s(&digest.body), n(now), s(uid)],
+            "INSERT OR IGNORE INTO channel_deliveries\n                 (id, uid, channel, idempotency_key, channel_chat_id, text, next_attempt_at, created_at, updated_at)\n               SELECT ?1, b.uid, b.channel, ?2, COALESCE(b.channel_chat_id, b.channel_user_id), ?3, ?4, ?4, ?4\n               FROM channel_bindings b\n               WHERE b.uid = ?5 AND b.revoked_at IS NULL\n                 AND EXISTS (SELECT 1 FROM memory_daily_reviews r WHERE r.id = ?6 AND r.uid = ?5)\n               ORDER BY b.verified_at DESC LIMIT 1",
+            &[s(&delivery), s(&delivery), s(&digest.body), n(now), s(uid), s(&id)],
         )?);
-        db.batch(statements).await?;
-        Ok(true)
+        let results = db.batch(statements).await?;
+        Ok(changes(&results[0]) == 1)
     }
 
     async fn generate_for_user(
